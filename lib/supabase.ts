@@ -1,0 +1,332 @@
+// lib/supabase.ts
+import { createClient } from '@supabase/supabase-js';
+import type { User, Session } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Faltan variables de entorno de Supabase');
+}
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// ============================================================================
+// TIPOS
+// ============================================================================
+
+export interface AuthUser extends User {
+  user_metadata: {
+    full_name?: string;
+    [key: string]: any;
+  };
+}
+
+export interface UserProfile {
+  id: string;
+  agency_id: string;
+  full_name: string;
+  role: 'owner' | 'agent';
+  created_at: string;
+}
+
+export interface Agency {
+  id: string;
+  name: string;
+  plan: 'solo' | 'team' | 'inmobiliaria';
+  max_agents: number;
+  subscription_status: 'active' | 'trial' | 'cancelled';
+  created_at: string;
+}
+
+export interface Property {
+  id: string;
+  source_portal: 'fincaraiz' | 'metrocuadrado' | 'properati' | 'ciencuadras';
+  source_url: string;
+  title: string;
+  description: string;
+  price_cop: number;
+  city: string;
+  neighborhood?: string;
+  bedrooms?: number;
+  bathrooms?: number;
+  area_m2?: number;
+  property_type: 'apartamento' | 'casa' | 'oficina' | 'lote';
+  listing_type: 'venta' | 'arriendo';
+  photos: string[];
+  latitude?: number;
+  longitude?: number;
+  is_duplicate: boolean;
+  canonical_id?: string;
+  created_at: string;
+}
+
+// ============================================================================
+// AUTENTICACIÓN
+// ============================================================================
+
+export async function signUpWithEmail(
+  email: string,
+  password: string,
+  fullName: string,
+  agencyName?: string
+) {
+  try {
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+        },
+      },
+    });
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error('Error al crear usuario');
+
+    let finalAgencyId = '';
+    if (!agencyName) {
+      agencyName = `Agencia de ${fullName}`;
+    }
+
+    const { data: agency, error: agencyError } = await supabase
+      .from('agencies')
+      .insert({
+        name: agencyName,
+        plan: 'solo',
+        max_agents: 1,
+        subscription_status: 'trial',
+      })
+      .select()
+      .single();
+
+    if (agencyError) throw agencyError;
+    finalAgencyId = agency.id;
+
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .insert({
+        id: authData.user.id,
+        agency_id: finalAgencyId,
+        full_name: fullName,
+        role: 'owner',
+      })
+      .select()
+      .single();
+
+    if (profileError) throw profileError;
+
+    return {
+      success: true,
+      user: authData.user,
+      profile,
+      message: 'Verifica tu correo para completar el registro',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Error en registro',
+    };
+  }
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      user: data.user,
+      session: data.session,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Error al iniciar sesión',
+    };
+  }
+}
+
+export async function getCurrentSession(): Promise<Session | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session;
+}
+
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  const { data } = await supabase.auth.getUser();
+  return data.user as AuthUser | null;
+}
+
+export async function getUserProfile(userId: string): Promise<UserProfile | null> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  if (error) {
+    console.error('Error obteniendo perfil:', error);
+    return null;
+  }
+
+  return data;
+}
+
+export async function getUserAgency(userId: string): Promise<Agency | null> {
+  const profile = await getUserProfile(userId);
+  if (!profile) return null;
+
+  const { data, error } = await supabase
+    .from('agencies')
+    .select('*')
+    .eq('id', profile.agency_id)
+    .single();
+
+  if (error) {
+    console.error('Error obteniendo agencia:', error);
+    return null;
+  }
+
+  return data;
+}
+
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+// ============================================================================
+// PROPIEDADES
+// ============================================================================
+
+export async function searchProperties(filters: {
+  city?: string;
+  listing_type?: 'venta' | 'arriendo';
+  property_type?: string;
+  min_price?: number;
+  max_price?: number;
+  min_bedrooms?: number;
+  min_area?: number;
+  limit?: number;
+  offset?: number;
+}) {
+  let query = supabase
+    .from('properties')
+    .select('*')
+    .eq('is_duplicate', false);
+
+  if (filters.city) query = query.eq('city', filters.city);
+  if (filters.listing_type) query = query.eq('listing_type', filters.listing_type);
+  if (filters.property_type) query = query.eq('property_type', filters.property_type);
+  if (filters.min_price) query = query.gte('price_cop', filters.min_price);
+  if (filters.max_price) query = query.lte('price_cop', filters.max_price);
+  if (filters.min_bedrooms) query = query.gte('bedrooms', filters.min_bedrooms);
+  if (filters.min_area) query = query.gte('area_m2', filters.min_area);
+
+  const limit = filters.limit || 50;
+  const offset = filters.offset || 0;
+
+  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+
+  const { data, error, count } = await query;
+
+  if (error) throw error;
+
+  return {
+    properties: data || [],
+    count,
+  };
+}
+
+// ============================================================================
+// BÚSQUEDAS GUARDADAS
+// ============================================================================
+
+export async function savesearch(
+  userId: string,
+  searchQuery: string,
+  filters: Record<string, any>,
+  shareLink?: boolean
+) {
+  const shareLinkId = shareLink ? generateShareLinkId() : null;
+
+  const { data, error } = await supabase
+    .from('saved_searches')
+    .insert({
+      user_id: userId,
+      search_query: searchQuery,
+      filters,
+      share_link_id: shareLinkId,
+      alert_enabled: false,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  return data;
+}
+
+export async function fetchSavedSearches(userId: string) {
+  const { data, error } = await supabase
+    .from('saved_searches')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+export async function updateSavedSearch(
+  id: string,
+  patch: { search_query?: string; filters?: Record<string, any>; alert_enabled?: boolean }
+) {
+  const { data, error } = await supabase
+    .from('saved_searches')
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteSavedSearch(id: string) {
+  const { error } = await supabase.from('saved_searches').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function toggleSavedSearchAlert(id: string, enabled: boolean) {
+  return updateSavedSearch(id, { alert_enabled: enabled });
+}
+
+// ============================================================================
+// UTILIDADES
+// ============================================================================
+
+function generateShareLinkId(): string {
+  return Math.random().toString(36).substring(2, 15) +
+         Math.random().toString(36).substring(2, 15);
+}
+
+export async function isAuthenticated(): Promise<boolean> {
+  const session = await getCurrentSession();
+  return !!session;
+}
+
+export function onAuthStateChange(
+  callback: (user: AuthUser | null, session: Session | null) => void
+) {
+  return supabase.auth.onAuthStateChange((event, session) => {
+    callback(session?.user as AuthUser | null, session);
+  });
+}
