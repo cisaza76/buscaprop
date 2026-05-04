@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { COLOMBIAN_CITIES, cn } from '@/lib/utils';
 import type { PropertyFilters } from '@/hooks/useProperties';
+import { useNeighborhoods } from '@/hooks/useNeighborhoods';
 
 interface AdvancedFiltersProps {
   filters: PropertyFilters;
@@ -24,9 +25,16 @@ const BATHROOM_OPTIONS = [1, 2, 3, 4];
 export function AdvancedFilters({ filters, onApply, onClear }: AdvancedFiltersProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<PropertyFilters>(filters);
+  const { neighborhoods, isLoading: isLoadingHoods } = useNeighborhoods(draft.city);
 
   const update = <K extends keyof PropertyFilters>(key: K, value: PropertyFilters[K]) => {
-    setDraft((d) => ({ ...d, [key]: value }));
+    setDraft((d) => {
+      const next = { ...d, [key]: value };
+      // Cambiar ciudad invalida el barrio seleccionado (puede no existir
+      // en la nueva ciudad). Reset automático.
+      if (key === 'city') next.neighborhood = undefined;
+      return next;
+    });
   };
 
   const apply = () => {
@@ -51,7 +59,7 @@ export function AdvancedFilters({ filters, onApply, onClear }: AdvancedFiltersPr
 
       {open && (
         <div className="border-t border-gray-200 p-4 space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
               <select
@@ -67,8 +75,31 @@ export function AdvancedFilters({ filters, onApply, onClear }: AdvancedFiltersPr
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Barrio</label>
+              <select
+                value={draft.neighborhood ?? ''}
+                onChange={(e) => update('neighborhood', e.target.value || undefined)}
+                disabled={!draft.city || isLoadingHoods}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-teal-500 focus:border-teal-500 disabled:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-400"
+              >
+                <option value="">
+                  {!draft.city
+                    ? 'Selecciona ciudad primero'
+                    : isLoadingHoods
+                      ? 'Cargando barrios…'
+                      : `Todos los barrios (${neighborhoods.length})`}
+                </option>
+                {neighborhoods.map((h) => (
+                  <option key={h} value={h}>
+                    {h}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Operación</label>
-              <div className="flex gap-3">
+              <div className="flex gap-3 items-center h-[42px]">
                 {(['venta', 'arriendo'] as const).map((op) => (
                   <label key={op} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                     <input

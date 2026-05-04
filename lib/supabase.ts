@@ -207,6 +207,7 @@ export async function signOut() {
 
 export async function searchProperties(filters: {
   city?: string;
+  neighborhood?: string;
   listing_type?: 'venta' | 'arriendo';
   property_type?: string;
   min_price?: number;
@@ -222,6 +223,7 @@ export async function searchProperties(filters: {
     .eq('is_duplicate', false);
 
   if (filters.city) query = query.eq('city', filters.city);
+  if (filters.neighborhood) query = query.eq('neighborhood', filters.neighborhood);
   if (filters.listing_type) query = query.eq('listing_type', filters.listing_type);
   if (filters.property_type) query = query.eq('property_type', filters.property_type);
   if (filters.min_price) query = query.gte('price_cop', filters.min_price);
@@ -242,6 +244,30 @@ export async function searchProperties(filters: {
     properties: data || [],
     count,
   };
+}
+
+// Devuelve los barrios distintos que existen en una ciudad. PostgREST no
+// soporta SELECT DISTINCT, así que dedupeamos client-side. Limitamos a
+// 5000 filas — suficiente para extraer los ~50-200 barrios únicos por
+// ciudad colombiana sin traer todo el dataset.
+export async function fetchNeighborhoodsByCity(city: string): Promise<string[]> {
+  if (!city) return [];
+  const { data, error } = await supabase
+    .from('properties')
+    .select('neighborhood')
+    .eq('city', city)
+    .eq('is_duplicate', false)
+    .not('neighborhood', 'is', null)
+    .limit(5000);
+  if (error) {
+    console.error('Error obteniendo barrios:', error);
+    return [];
+  }
+  const set = new Set<string>();
+  for (const r of data ?? []) {
+    if (r.neighborhood) set.add(r.neighborhood);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'es-CO'));
 }
 
 // ============================================================================

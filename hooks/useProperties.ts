@@ -7,6 +7,7 @@ import { searchProperties, type Property } from '@/lib/supabase';
 export type PropertyFilters = {
   query?: string;
   city?: string;
+  neighborhood?: string;
   property_type?: 'apartamento' | 'casa' | 'oficina' | 'lote';
   listing_type?: 'venta' | 'arriendo';
   min_price?: number;
@@ -32,6 +33,7 @@ export function useProperties() {
         const offset = (nextPage - 1) * PAGE_SIZE;
         const { properties: results } = await searchProperties({
           city: nextFilters.city,
+          neighborhood: nextFilters.neighborhood,
           listing_type: nextFilters.listing_type,
           property_type: nextFilters.property_type,
           min_price: nextFilters.min_price,
