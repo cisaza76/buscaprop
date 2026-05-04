@@ -264,6 +264,13 @@ export function mapProperatiCard(
     }
   });
 
+  // Contacto: nombre/inmobiliaria visible en el card. Phone NO está en
+  // search (está detrás de un click "Mostrar teléfono" que requiere JS).
+  const agentName = textOf($card, '[data-test="agency-name"]');
+  // Heurística: si el nombre tiene sufijo legal o palabras tipo "Inmobiliaria",
+  // tratarlo como empresa. Si es nombre de persona, tratarlo como contact_name.
+  const isCompany = agentName ? looksLikeCompany(agentName) : false;
+
   return {
     source_portal: 'properati',
     source_url: dataUrl,
@@ -280,7 +287,15 @@ export function mapProperatiCard(
     photos,
     latitude: undefined,
     longitude: undefined,
+    contact_name: !isCompany && agentName ? agentName : undefined,
+    company_name: isCompany ? agentName : undefined,
+    // Phone no disponible en search-only.
+    contact_phone: undefined,
   };
+}
+
+function looksLikeCompany(name: string): boolean {
+  return /\b(SAS|S\.A\.S\.?|LTDA|S\.A\.|INMOBILIARIA|CONSTRUCTORA?|GRUPO|REALTY|RESORTS|CASAS|CIA)\b/i.test(name);
 }
 
 function textOf($card: ReturnType<cheerio.CheerioAPI>, selector: string): string {

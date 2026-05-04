@@ -327,6 +327,16 @@ export function parseFincaraizListing(
   const lat = action?.object?.geo?.latitude;
   const lng = action?.object?.geo?.longitude;
 
+  // Contacto: el JSON-LD tiene un nodo `landlord` con name e image. Suele
+  // ser una empresa (SAS/S.A.S.) pero a veces es nombre de persona.
+  // Fincaraíz NO expone phone en JSON-LD; intentamos un regex sobre el
+  // HTML por un atributo tel: o WhatsApp link como fallback.
+  const landlord = action?.landlord;
+  const landlordName =
+    typeof landlord?.name === 'string' ? normalizeWhitespace(landlord.name) : undefined;
+  const isCompany = landlordName ? looksLikeCompany(landlordName) : false;
+  const contact_phone = extractPhoneFromHtml(html) ?? undefined;
+
   const propertyType: PropertyType | null = mapPropertyType(slug.type);
   if (!propertyType) return null;
   const listingType: ListingType = slug.op === 'venta' ? 'venta' : 'arriendo';
@@ -347,7 +357,31 @@ export function parseFincaraizListing(
     photos,
     latitude: typeof lat === 'number' ? lat : undefined,
     longitude: typeof lng === 'number' ? lng : undefined,
+    contact_name: landlordName,
+    company_name: isCompany ? landlordName : undefined,
+    contact_phone,
   };
+}
+
+// Heurística: el name parece empresa si tiene sufijo legal típico.
+function looksLikeCompany(name: string): boolean {
+  return /\b(SAS|S\.A\.S\.?|S\.A\.|LTDA|S\.?A\.?|INMOBILIARIA|CONSTRUCTOR|GRUPO)\b/i.test(name);
+}
+
+// Extrae phone del HTML: primero tel: link, luego un wa.me/{number}.
+function extractPhoneFromHtml(html: string): string | null {
+  // tel: link
+  const tel = html.match(/href="tel:\+?(\d[\d\s-]{6,})"/);
+  if (tel) {
+    const digits = tel[1].replace(/\D/g, '');
+    if (digits.length >= 7) {
+      return digits.startsWith('57') ? digits : `57${digits}`;
+    }
+  }
+  // wa.me link
+  const wa = html.match(/wa\.me\/(\d{10,15})/);
+  if (wa) return wa[1];
+  return null;
 }
 
 // Itera blocks JSON-LD y devuelve el primero que sea un Action sobre real estate.

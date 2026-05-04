@@ -327,6 +327,15 @@ interface M2SearchResult {
   mzona?: string | null;
   mestadoinmueble?: string;
   mnombreproyecto?: string | null;
+  /** Teléfono de la inmobiliaria (el campo M2 trae 10 dígitos sin prefijo país). */
+  contactPhone?: string | number | null;
+  /** WhatsApp ya viene con prefijo país (ej "573108200107"). */
+  whatsapp?: string | number | null;
+  /** ID numérico de la empresa (no nos sirve sin lookup separado). */
+  midempresa?: string | number | null;
+  /** Nombre de la inmobiliaria que publicó. NO está en search inline; solo en
+   *  detail page. enrichWithDetail() lo puebla cuando se activa. */
+  mnombreinmobiliaria?: string | null;
 }
 
 function getResultLink(item: unknown): string | null {
@@ -381,6 +390,12 @@ export function mapSearchResultToProperty(
   // Title: preferir el del payload, fallback construido.
   const title = normalizeWhitespace(r.title ?? `${propertyType} en ${city}`);
 
+  // Contacto inline en search results (gold — no requiere detail-fetch).
+  // M2 expone contactPhone (10 dígitos) y whatsapp (ya con prefijo 57).
+  // Preferimos whatsapp porque es lo que va a wa.me/.
+  const phone =
+    normalizePhone(r.whatsapp) ?? normalizePhone(r.contactPhone) ?? undefined;
+
   return {
     source_portal: 'metrocuadrado',
     source_url: sourceUrl,
@@ -397,7 +412,21 @@ export function mapSearchResultToProperty(
     photos,
     latitude: undefined, // solo en detail page
     longitude: undefined,
+    contact_phone: phone,
+    company_name: r.mnombreinmobiliaria || undefined, // solo si vino en search
   };
+}
+
+// Normaliza el phone a E.164 sin '+'. M2 trae a veces sin prefijo (10
+// dígitos = celular Colombia) o con prefijo (12 dígitos = 57+celular).
+function normalizePhone(raw: unknown): string | null {
+  if (raw == null) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('57') && digits.length >= 12) return digits;
+  if (digits.length === 10) return `57${digits}`;
+  if (digits.length >= 7) return digits; // dejarlo crudo si tiene formato inesperado
+  return null;
 }
 
 function inferListingType(r: M2SearchResult, searchUrl: string): ListingType | null {
@@ -440,6 +469,10 @@ interface M2DetailData {
   coordinates?: { lat?: number; lon?: number };
   comment?: string;
   images?: Array<{ image?: string; imageMobile?: string }>;
+  /** Datos de la inmobiliaria que publicó (gold — no está en search). */
+  companyName?: string;
+  contactPhone?: string | number;
+  whatsapp?: string | number;
 }
 
 export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
@@ -453,5 +486,11 @@ export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
   if (Array.isArray(data.images) && data.images.length > 0) {
     const urls = data.images.map((img) => img?.image).filter((u): u is string => !!u);
     if (urls.length > 0) item.photos = urls;
+  }
+  // Contacto desde detail page (más rico que search: incluye companyName).
+  if (data.companyName && !item.company_name) item.company_name = data.companyName;
+  if (!item.contact_phone) {
+    const phone = normalizePhone(data.whatsapp) ?? normalizePhone(data.contactPhone);
+    if (phone) item.contact_phone = phone;
   }
 }

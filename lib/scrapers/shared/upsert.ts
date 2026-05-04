@@ -24,20 +24,44 @@ function getServerClient(): SupabaseClient {
   return cachedClient;
 }
 
-// Detecta si la BD tiene la columna dedup_hash (depende de migración 003).
-// Cacheado para no hacer la sniff query en cada upsert.
-let hasDedupHashColumn: boolean | null = null;
-async function detectDedupHashColumn(supabase: SupabaseClient): Promise<boolean> {
-  if (hasDedupHashColumn !== null) return hasDedupHashColumn;
-  const { error } = await supabase.from('properties').select('dedup_hash').limit(1);
-  hasDedupHashColumn = !error;
-  if (!hasDedupHashColumn) {
+// Detecta qué columnas opcionales están disponibles en la BD. Las migraciones
+// 003 y 004 agregan distintos campos; los scrapers degradan gracefully si
+// alguna no está aplicada. Cache por proceso para no sniffer en cada upsert.
+const OPTIONAL_COLUMNS = ['dedup_hash', 'contact_name', 'contact_phone', 'company_name'] as const;
+type OptionalCol = (typeof OPTIONAL_COLUMNS)[number];
+
+let availableColumns: Set<OptionalCol> | null = null;
+
+async function detectAvailableColumns(supabase: SupabaseClient): Promise<Set<OptionalCol>> {
+  if (availableColumns) return availableColumns;
+  // Probar todas a la vez (rápido si todas existen).
+  const allCols = OPTIONAL_COLUMNS.join(',');
+  const { error } = await supabase.from('properties').select(allCols).limit(1);
+  if (!error) {
+    availableColumns = new Set(OPTIONAL_COLUMNS);
+    return availableColumns;
+  }
+  // Alguna falta → testear individualmente para identificar cuáles.
+  const found = new Set<OptionalCol>();
+  for (const col of OPTIONAL_COLUMNS) {
+    const { error: e } = await supabase.from('properties').select(col).limit(1);
+    if (!e) found.add(col);
+  }
+  availableColumns = found;
+
+  const missing = OPTIONAL_COLUMNS.filter((c) => !found.has(c));
+  if (missing.length > 0) {
+    const m = missing.join(', ');
+    const migs = [];
+    if (missing.includes('dedup_hash')) migs.push('003_add_dedup_hash.sql');
+    if (missing.some((c) => c === 'contact_name' || c === 'contact_phone' || c === 'company_name'))
+      migs.push('004_add_contact_fields.sql');
     console.warn(
-      `⚠️  Columna 'dedup_hash' no disponible (${error?.code ?? 'unknown'}). ` +
-        'Cross-portal dedup desactivado. Run supabase/migrations/003_add_dedup_hash.sql.'
+      `⚠️  Columnas opcionales no disponibles: ${m}. ` +
+        `Ejecutar en Supabase SQL Editor: ${migs.join(', ')}`
     );
   }
-  return hasDedupHashColumn;
+  return availableColumns;
 }
 
 export interface UpsertOutcome {
@@ -48,11 +72,11 @@ export interface UpsertOutcome {
 
 export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome> {
   const supabase = getServerClient();
-  const dedupAvailable = await detectDedupHashColumn(supabase);
+  const available = await detectAvailableColumns(supabase);
 
   let canonicalId: string | null = null;
   let hash: string | null = null;
-  if (dedupAvailable) {
+  if (available.has('dedup_hash')) {
     hash = dedupeHash(p);
     const { data: existing } = await supabase
       .from('properties')
@@ -86,7 +110,10 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
     canonical_id: canonicalId,
     scraped_at: p.scraped_at ?? new Date().toISOString(),
   };
-  if (dedupAvailable && hash) row.dedup_hash = hash;
+  if (available.has('dedup_hash') && hash) row.dedup_hash = hash;
+  if (available.has('contact_name')) row.contact_name = p.contact_name ?? null;
+  if (available.has('contact_phone')) row.contact_phone = p.contact_phone ?? null;
+  if (available.has('company_name')) row.company_name = p.company_name ?? null;
 
   const { data: upserted, error } = await supabase
     .from('properties')

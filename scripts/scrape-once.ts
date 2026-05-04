@@ -2,16 +2,20 @@
 // CLI para ejecutar los scrapers manualmente desde la terminal.
 // Uso:
 //   npx tsx scripts/scrape-once.ts [--portal fincaraiz] [--max 50] [--op venta|arriendo]
+//   npx tsx scripts/scrape-once.ts --refresh-contacts [--portal X]
 //
 // Útil para:
 //   - smoke testing de un scraper específico
 //   - poblar la BD localmente sin esperar al cron
-//   - debug en desarrollo
+//   - refrescar contact_phone/name/company en listings existentes
 //
 // Notas:
-// - --op acepta 'venta' o 'arriendo'. Para Fincaraíz se mapea 'arriendo' → 'alquiler'
-//   (que es el término que usa su sitemap).
+// - --op acepta 'venta' o 'arriendo'. Para Fincaraíz se mapea 'arriendo' → 'alquiler'.
 // - Sin --op, cada scraper usa su default (típicamente venta+arriendo).
+// - --refresh-contacts re-corre el scraper con --max 5000 default. Como
+//   upsert es idempotente, los listings existentes se ACTUALIZAN con los
+//   nuevos campos contact_name/phone/company sin duplicar filas.
+//   Para refrescar UN portal específico: --refresh-contacts --portal Y.
 
 // Cargar .env.local antes de cualquier import que dependa de env vars.
 import dotenv from 'dotenv';
@@ -27,6 +31,7 @@ interface CliArgs {
   portal?: SourcePortal;
   max?: number;
   op?: Op;
+  refreshContacts?: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -36,6 +41,7 @@ function parseArgs(argv: string[]): CliArgs {
     if (a === '--portal') args.portal = argv[++i] as SourcePortal;
     else if (a === '--max') args.max = parseInt(argv[++i], 10);
     else if (a === '--op') args.op = argv[++i] as Op;
+    else if (a === '--refresh-contacts') args.refreshContacts = true;
   }
   return args;
 }
@@ -50,18 +56,33 @@ async function main() {
     args.op === 'venta' ? ['venta'] : args.op === 'arriendo' ? ['alquiler'] : undefined;
   const otherOps: Op[] | undefined = args.op ? [args.op] : undefined;
 
+  // --refresh-contacts: si no se especifica --max, defaultear a 5000 para
+  // cubrir todo el inventario realista. La upsert idempotente actualiza
+  // contact_name/phone/company en listings existentes.
+  let max = args.max;
+  if (args.refreshContacts && !max) {
+    max = 5000;
+    console.log('🔄 Refresh-contacts mode: --max default 5000 (override con --max N).');
+    console.log('   Disponibilidad de phone por portal:');
+    console.log('     ✓ MetroCuadrado: phone+whatsapp inline en search (rápido)');
+    console.log('     ~ Fincaraíz:     name del landlord (phone solo si está en HTML)');
+    console.log('     ~ Properati:     name de la agencia (phone tras click, no scrapeable)');
+    console.log('     ✗ Ciencuadras:   contacto detrás de form JS (no accesible)');
+  }
+
   console.log('🚀 Iniciando scrapers...', {
     portals: portals ?? 'todos',
-    max: args.max,
+    max,
     op: args.op ?? 'venta+arriendo',
+    refreshContacts: !!args.refreshContacts,
   });
 
   const opts: RunnerOptions = {
     portals,
-    fincaraiz: { maxListings: args.max, listingTypes: fincaraizOps },
-    metrocuadrado: { maxListings: args.max, listingTypes: otherOps },
-    properati: { maxListings: args.max, listingTypes: otherOps },
-    ciencuadras: { maxListings: args.max, listingTypes: otherOps },
+    fincaraiz: { maxListings: max, listingTypes: fincaraizOps },
+    metrocuadrado: { maxListings: max, listingTypes: otherOps },
+    properati: { maxListings: max, listingTypes: otherOps },
+    ciencuadras: { maxListings: max, listingTypes: otherOps },
   };
 
   const { results, totals } = await runAllScrapers(opts);

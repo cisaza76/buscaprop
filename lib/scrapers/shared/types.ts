@@ -25,6 +25,12 @@ export interface ScrapedProperty {
   photos: string[];
   latitude?: number;
   longitude?: number;
+  /** Persona o agente que publicó (puede ser nombre individual o empresa). */
+  contact_name?: string;
+  /** Teléfono/WhatsApp del agente (formato E.164 sin '+', listo para wa.me/). */
+  contact_phone?: string;
+  /** Nombre de la empresa/agencia (ej: "Profesionales Inmobiliarios"). */
+  company_name?: string;
   scraped_at?: string; // ISO timestamp; default = ahora.
 }
 
