@@ -17,22 +17,15 @@ export function parseCOP(input: string | number | null | undefined): number | nu
 
   if (!cleaned) return null;
 
-  // Heurística: si tiene tanto "." como ",", el último es decimal.
-  // En es-CO "208.000.000,00" → coma es decimal; punto es miles.
-  // En en-US "208,000,000.00" → punto es decimal; coma es miles.
-  const lastDot = cleaned.lastIndexOf('.');
-  const lastComma = cleaned.lastIndexOf(',');
-
+  // Heurística para COP (siempre pesos enteros, no centavos):
+  //   - Si hay coma: formato es-CO "208.000.000,00" → puntos=miles, coma=decimal
+  //   - Si NO hay coma: todos los puntos son separadores de miles
+  //     (cubre "509.430.000" y "$1.350.000.000" sin tratar el último '.' como decimal)
   let normalized: string;
-  if (lastComma > lastDot) {
-    // formato es-CO: puntos = miles, coma = decimal
+  if (cleaned.includes(',')) {
     normalized = cleaned.replace(/\./g, '').replace(',', '.');
-  } else if (lastDot > lastComma) {
-    // formato en-US: comas = miles, punto = decimal
-    normalized = cleaned.replace(/,/g, '');
   } else {
-    // solo un separador, asumimos miles (precios sin decimales en COP)
-    normalized = cleaned.replace(/[.,]/g, '');
+    normalized = cleaned.replace(/\./g, '');
   }
 
   const n = Number(normalized);
@@ -112,6 +105,13 @@ const CITY_CANONICAL: Record<string, string> = {
 
 export function canonicalCity(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const k = raw.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z\s.]/g, ' ').replace(/\s+/g, ' ').trim();
+  const k = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\./g, '') // "bogota d.c." → "bogota dc"
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return CITY_CANONICAL[k] ?? raw.trim();
 }
