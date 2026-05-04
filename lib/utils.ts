@@ -79,6 +79,20 @@ export type ParsedQueryFilters = {
   min_bedrooms?: number;
 };
 
+// Genera una etiqueta legible a partir de filtros — útil para auto-titular
+// una búsqueda guardada cuando el usuario no escribió texto.
+export function describeFilters(f: ParsedQueryFilters & { max_price?: number; min_price?: number }): string {
+  const parts: string[] = [];
+  if (f.property_type) parts.push(propertyTypeLabel(f.property_type));
+  if (f.city) parts.push(`en ${f.city}`);
+  if (f.listing_type) parts.push(listingTypeLabel(f.listing_type).toLowerCase());
+  if (f.min_bedrooms) parts.push(`${f.min_bedrooms}+ hab`);
+  if (f.min_price && f.max_price) parts.push(`${formatCOPShort(f.min_price)}–${formatCOPShort(f.max_price)}`);
+  else if (f.min_price) parts.push(`desde ${formatCOPShort(f.min_price)}`);
+  else if (f.max_price) parts.push(`hasta ${formatCOPShort(f.max_price)}`);
+  return parts.join(' · ');
+}
+
 // Parser de lenguaje natural para la SearchBar.
 // Ej: "Apartamento 3 hab Bogotá arriendo" → { property_type, min_bedrooms, city, listing_type }.
 export function parseSearchQuery(query: string): ParsedQueryFilters {

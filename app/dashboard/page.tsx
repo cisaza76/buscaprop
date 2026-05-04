@@ -9,13 +9,13 @@ import { AdvancedFilters } from '@/components/dashboard/AdvancedFilters';
 import { ResultsGrid } from '@/components/dashboard/ResultsGrid';
 import { SavedSearchesSidebar } from '@/components/dashboard/SavedSearchesSidebar';
 import { useProperties, type PropertyFilters } from '@/hooks/useProperties';
-import { savesearch as createSavedSearch } from '@/lib/supabase';
-import type { SavedSearch } from '@/hooks/useSavedSearches';
-import { parseSearchQuery } from '@/lib/utils';
+import { useSavedSearches, type SavedSearch } from '@/hooks/useSavedSearches';
+import { parseSearchQuery, describeFilters } from '@/lib/utils';
 
 export default function DashboardPage() {
   const { user, agency } = useAuth();
   const { properties, isLoading, error, page, filters, runSearch, goToPage } = useProperties();
+  const savedSearches = useSavedSearches(user?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<string | null>(null);
 
@@ -49,12 +49,13 @@ export default function DashboardPage() {
 
   const handleSaveSearch = async (query: string) => {
     if (!user) return;
-    if (!query.trim()) {
-      setToast('Escribe una consulta antes de guardar.');
+    const label = query.trim() || describeFilters(filters);
+    if (!label) {
+      setToast('Escribe una consulta o aplica filtros antes de guardar.');
       return;
     }
     try {
-      await createSavedSearch(user.id, query, filters);
+      await savedSearches.create(label, filters);
       setToast('Búsqueda guardada ✓');
     } catch (err) {
       console.error(err);
@@ -107,7 +108,14 @@ export default function DashboardPage() {
           </div>
 
           <div className="lg:sticky lg:top-20 lg:self-start">
-            <SavedSearchesSidebar userId={user?.id} onSelect={handleSelectSavedSearch} />
+            <SavedSearchesSidebar
+              searches={savedSearches.searches}
+              isLoading={savedSearches.isLoading}
+              error={savedSearches.error}
+              onSelect={handleSelectSavedSearch}
+              onToggleAlert={savedSearches.toggleAlert}
+              onRemove={savedSearches.remove}
+            />
           </div>
         </div>
       </main>

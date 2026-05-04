@@ -2,16 +2,25 @@
 'use client';
 
 import Link from 'next/link';
-import { useSavedSearches, type SavedSearch } from '@/hooks/useSavedSearches';
+import type { SavedSearch } from '@/hooks/useSavedSearches';
 
 interface SavedSearchesSidebarProps {
-  userId: string | undefined;
+  searches: SavedSearch[];
+  isLoading: boolean;
+  error: string | null;
   onSelect: (search: SavedSearch) => void;
+  onToggleAlert: (id: string, enabled: boolean) => void;
+  onRemove: (id: string) => void;
 }
 
-export function SavedSearchesSidebar({ userId, onSelect }: SavedSearchesSidebarProps) {
-  const { searches, isLoading, error, toggleAlert, remove } = useSavedSearches(userId);
-
+export function SavedSearchesSidebar({
+  searches,
+  isLoading,
+  error,
+  onSelect,
+  onToggleAlert,
+  onRemove,
+}: SavedSearchesSidebarProps) {
   return (
     <aside className="bg-white rounded-lg border border-gray-200 p-4">
       <div className="flex items-center justify-between mb-3">
@@ -61,7 +70,7 @@ export function SavedSearchesSidebar({ userId, onSelect }: SavedSearchesSidebarP
                   <input
                     type="checkbox"
                     checked={s.alert_enabled}
-                    onChange={(e) => toggleAlert(s.id, e.target.checked)}
+                    onChange={(e) => onToggleAlert(s.id, e.target.checked)}
                     className="text-teal-600 focus:ring-teal-500 rounded"
                   />
                   <span>Alertas</span>
@@ -69,7 +78,7 @@ export function SavedSearchesSidebar({ userId, onSelect }: SavedSearchesSidebarP
                 <button
                   type="button"
                   onClick={() => {
-                    if (confirm('¿Eliminar esta búsqueda guardada?')) remove(s.id);
+                    if (confirm('¿Eliminar esta búsqueda guardada?')) onRemove(s.id);
                   }}
                   className="text-red-600 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
                 >
