@@ -32,6 +32,7 @@ export function useProperties() {
       try {
         const offset = (nextPage - 1) * PAGE_SIZE;
         const { properties: results } = await searchProperties({
+          query: nextFilters.query,
           city: nextFilters.city,
           neighborhood: nextFilters.neighborhood,
           listing_type: nextFilters.listing_type,

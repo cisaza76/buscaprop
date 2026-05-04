@@ -10,7 +10,7 @@ import { ResultsGrid } from '@/components/dashboard/ResultsGrid';
 import { SavedSearchesSidebar } from '@/components/dashboard/SavedSearchesSidebar';
 import { useProperties, type PropertyFilters } from '@/hooks/useProperties';
 import { useSavedSearches, type SavedSearch } from '@/hooks/useSavedSearches';
-import { parseSearchQuery, describeFilters } from '@/lib/utils';
+import { describeFilters } from '@/lib/utils';
 
 export default function DashboardPage() {
   const { user, agency } = useAuth();
@@ -30,12 +30,12 @@ export default function DashboardPage() {
   }, [toast]);
 
   const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    // Texto libre → filtros (city, property_type, listing_type, bedrooms).
-    // Lo parseado pisa los filtros existentes para que "lo que escribiste" gane.
-    const parsed = parseSearchQuery(query);
-    const merged: PropertyFilters = { ...filters, ...parsed };
-    runSearch(merged, 1);
+    const trimmed = query.trim();
+    setSearchQuery(trimmed);
+    // Búsqueda de texto libre sobre title (ILIKE en searchProperties).
+    // Compone con los filtros estructurados existentes (city, neighborhood,
+    // tipo, etc) — todo se aplica como AND.
+    runSearch({ ...filters, query: trimmed || undefined }, 1);
   };
 
   const handleApplyFilters = (next: PropertyFilters) => {

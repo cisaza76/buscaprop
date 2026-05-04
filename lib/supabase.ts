@@ -206,6 +206,8 @@ export async function signOut() {
 // ============================================================================
 
 export async function searchProperties(filters: {
+  /** Texto libre: ILIKE case-insensitive sobre `title`. */
+  query?: string;
   city?: string;
   neighborhood?: string;
   listing_type?: 'venta' | 'arriendo';
@@ -222,6 +224,12 @@ export async function searchProperties(filters: {
     .select('*')
     .eq('is_duplicate', false);
 
+  // Texto libre: ILIKE 'word%word%' sobre title. Insensible a mayúsculas/tildes.
+  // Nota: PostgREST escapa el valor automáticamente; no hay riesgo de SQL injection.
+  if (filters.query?.trim()) {
+    const q = filters.query.trim();
+    query = query.ilike('title', `%${q}%`);
+  }
   if (filters.city) query = query.eq('city', filters.city);
   if (filters.neighborhood) query = query.eq('neighborhood', filters.neighborhood);
   if (filters.listing_type) query = query.eq('listing_type', filters.listing_type);
