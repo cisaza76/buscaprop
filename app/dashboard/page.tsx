@@ -11,6 +11,7 @@ import { SavedSearchesSidebar } from '@/components/dashboard/SavedSearchesSideba
 import { useProperties, type PropertyFilters } from '@/hooks/useProperties';
 import { savesearch as createSavedSearch } from '@/lib/supabase';
 import type { SavedSearch } from '@/hooks/useSavedSearches';
+import { parseSearchQuery } from '@/lib/utils';
 
 export default function DashboardPage() {
   const { user, agency } = useAuth();
@@ -30,7 +31,11 @@ export default function DashboardPage() {
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
-    runSearch(filters, 1);
+    // Texto libre → filtros (city, property_type, listing_type, bedrooms).
+    // Lo parseado pisa los filtros existentes para que "lo que escribiste" gane.
+    const parsed = parseSearchQuery(query);
+    const merged: PropertyFilters = { ...filters, ...parsed };
+    runSearch(merged, 1);
   };
 
   const handleApplyFilters = (next: PropertyFilters) => {

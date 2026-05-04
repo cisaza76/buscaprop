@@ -66,3 +66,46 @@ export function formatDateES(iso: string): string {
 export function cn(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(' ');
 }
+
+// Normaliza para comparaciones case+acentos-insensibles ("bogota" ≈ "Bogotá").
+function normalize(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+export type ParsedQueryFilters = {
+  city?: string;
+  property_type?: 'apartamento' | 'casa' | 'oficina' | 'lote';
+  listing_type?: 'venta' | 'arriendo';
+  min_bedrooms?: number;
+};
+
+// Parser de lenguaje natural para la SearchBar.
+// Ej: "Apartamento 3 hab Bogotá arriendo" → { property_type, min_bedrooms, city, listing_type }.
+export function parseSearchQuery(query: string): ParsedQueryFilters {
+  if (!query.trim()) return {};
+  const haystack = ` ${normalize(query)} `;
+  const out: ParsedQueryFilters = {};
+
+  for (const city of COLOMBIAN_CITIES) {
+    if (haystack.includes(` ${normalize(city)} `) || haystack.includes(` ${normalize(city)},`)) {
+      out.city = city;
+      break;
+    }
+  }
+
+  if (/\b(apartamento|apto|aptos)\b/.test(haystack)) out.property_type = 'apartamento';
+  else if (/\bcasa(s)?\b/.test(haystack)) out.property_type = 'casa';
+  else if (/\boficina(s)?\b/.test(haystack)) out.property_type = 'oficina';
+  else if (/\blote(s)?\b/.test(haystack)) out.property_type = 'lote';
+
+  if (/\barriendo|arrendar|alquiler|rentar?\b/.test(haystack)) out.listing_type = 'arriendo';
+  else if (/\bventa|comprar|vender\b/.test(haystack)) out.listing_type = 'venta';
+
+  const bedroomMatch = haystack.match(/\b(\d+)\s*(habitacion(es)?|hab|alcoba(s)?|cuarto(s)?)\b/);
+  if (bedroomMatch) {
+    const n = Number(bedroomMatch[1]);
+    if (n > 0 && n <= 10) out.min_bedrooms = n;
+  }
+
+  return out;
+}
