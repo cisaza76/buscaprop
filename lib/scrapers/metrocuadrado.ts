@@ -1,47 +1,75 @@
 // lib/scrapers/metrocuadrado.ts
-// Scraper de MetroCuadrado — sin sitemap público; descubre URLs paginando
-// search results, luego extrae datos del payload Next.js RSC.
-// Estado: STUB para Día 3.
+// Scraper de MetroCuadrado — strategy SEARCH-ONLY:
+// 1 HTTP request por combo (city × type × op) → ~50-70 listings inline
+// en el RSC payload del HTML. No requiere Playwright ni detail-fetching.
 //
-// Recon Día 1:
-// - robots.txt: User-agent: * permite listings (solo bloquea /admin, /web, etc)
-// - NO hay sitemap.xml (devuelve la SPA Next.js)
-// - Search URL: https://www.metrocuadrado.com/{tipo}/{operacion}/{ciudad}/
-//   ej: /apartamento/venta/bogota/  (~3.000+ listings paginados)
-// - Detalle URL pattern (extraído del HTML del search):
-//   /inmueble/{operacion-tipo-ciudad-barrio-habs-banos-garajes}/{numeric}-M{id}
-// - HTML del search: 414KB, listings URLs HARDCODED en el HTML SSR (128 por página)
-// - HTML del detalle: 41KB, NO tiene JSON-LD; los datos están en
-//   `self.__next_f.push([1, "..."])` chunks (RSC streaming format)
-// - Campos visibles en RSC: bathrooms, area, neighborhood, images
-// - Tool: Cheerio + parser custom de RSC payload (más laborioso pero viable
-//         sin Playwright). Si Día 3 esto rompe, fallback a Playwright.
+// Trade-offs documentados:
+// - lat/lng ausentes (solo en detail page)
+// - description ausente (solo en detail page)
+// - 1 sola foto por listing (gallery completa solo en detail)
+//
+// Si se necesita data completa: enriquecer con `enrichWithDetail`
+// (configurable via opts.enrichWithDetail = true).
 
-import type { ScrapeResult, ScrapedProperty } from './shared/types';
+import { fetchText } from './shared/http';
+import { upsertBatch } from './shared/upsert';
+import {
+  canonicalCity,
+  mapPropertyType,
+  normalizeWhitespace,
+  parseInteger,
+} from './shared/normalize';
+import type {
+  ListingType,
+  PropertyType,
+  ScrapeResult,
+  ScrapedProperty,
+} from './shared/types';
+
+const M2_BASE = 'https://www.metrocuadrado.com';
+
+// UA browser-like — M2 NO bloquea UA "BuscaProp", pero damos browser por
+// consistencia con Properati y para no destacar.
+const M2_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 BuscaProp/1.0';
+
+const DEFAULT_CITIES = ['bogota', 'medellin', 'cali', 'barranquilla', 'cartagena'];
+const DEFAULT_TYPES: MetroCuadradoOptions['propertyTypes'] = [
+  'apartamento',
+  'casa',
+  'oficina',
+  'lote',
+];
+const DEFAULT_OPS: MetroCuadradoOptions['listingTypes'] = ['venta', 'arriendo'];
 
 export interface MetroCuadradoOptions {
+  /** Máximo de propiedades a insertar. Default 200. */
   maxListings?: number;
-  cities?: string[]; // slugs: bogota, medellin, cali, etc
+  /** Slugs de ciudades en el path M2 (sin tildes). */
+  cities?: string[];
   propertyTypes?: Array<'apartamento' | 'casa' | 'oficina' | 'lote'>;
   listingTypes?: Array<'venta' | 'arriendo'>;
+  /**
+   * Si true, fetch detail page por cada listing para añadir
+   * coordinates + description + gallery completa. ~50× más lento.
+   */
+  enrichWithDetail?: boolean;
 }
 
-export async function scrapeMetroCuadrado(_opts: MetroCuadradoOptions = {}): Promise<ScrapeResult> {
-  const startedAt = new Date().toISOString();
-  // TODO Día 3:
-  //   1. para cada combo {city × type × listing}: fetchText search page
-  //   2. cheerio → extraer href="/inmueble/...{ID}-M{NUM}"
-  //   3. paginar (?page=N) hasta 0 nuevas URLs
-  //   4. para cada URL detalle: fetchText → extraer chunks RSC
-  //   5. parsear JSON dentro de los chunks → ScrapedProperty
-  //   6. upsertBatch
-  throw new Error('scrapeMetroCuadrado not implemented yet (Día 3)');
+// ============================================================================
+// SCRAPER PRINCIPAL
+// ============================================================================
 
-  // eslint-disable-next-line @typescript-eslint/no-unreachable
-  return {
+export async function scrapeMetroCuadrado(
+  opts: MetroCuadradoOptions = {}
+): Promise<ScrapeResult> {
+  const startedAt = new Date().toISOString();
+  const t0 = Date.now();
+  const result: ScrapeResult = {
     portal: 'metrocuadrado',
     startedAt,
-    finishedAt: new Date().toISOString(),
+    finishedAt: '',
     durationMs: 0,
     discovered: 0,
     fetched: 0,
@@ -50,12 +78,380 @@ export async function scrapeMetroCuadrado(_opts: MetroCuadradoOptions = {}): Pro
     duplicates: 0,
     errors: [],
   };
+
+  const maxListings = opts.maxListings ?? 200;
+  const cities = opts.cities ?? DEFAULT_CITIES;
+  const propertyTypes = opts.propertyTypes ?? DEFAULT_TYPES!;
+  const listingTypes = opts.listingTypes ?? DEFAULT_OPS!;
+
+  // City-first iteration para diversidad geográfica desde el primer combo.
+  const combos: Array<{ city: string; type: string; op: string }> = [];
+  for (const op of listingTypes) {
+    for (const type of propertyTypes) {
+      for (const city of cities) {
+        combos.push({ city, type, op });
+      }
+    }
+  }
+
+  const items: ScrapedProperty[] = [];
+  const seenIds = new Set<string>();
+
+  for (const combo of combos) {
+    if (items.length >= maxListings) break;
+
+    const url = `${M2_BASE}/${combo.type}/${combo.op}/${combo.city}/`;
+    let html: string;
+    try {
+      html = await fetchText(url, { userAgent: M2_UA });
+      result.fetched++;
+    } catch (err) {
+      result.errors.push({
+        url,
+        stage: 'fetch',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    let chunks: string[];
+    let raw: unknown[] | null;
+    try {
+      chunks = extractRscChunks(html);
+      raw = extractSearchResults(chunks);
+    } catch (err) {
+      result.errors.push({
+        url,
+        stage: 'parse',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    if (!raw || raw.length === 0) {
+      result.errors.push({
+        url,
+        stage: 'parse',
+        message: 'no results array found in RSC chunks',
+      });
+      continue;
+    }
+
+    result.discovered += raw.length;
+    for (const item of raw) {
+      if (items.length >= maxListings) break;
+      try {
+        const mapped = mapSearchResultToProperty(item, url);
+        if (!mapped) continue;
+        if (seenIds.has(mapped.source_url)) continue; // dedup intra-run
+        seenIds.add(mapped.source_url);
+        items.push(mapped);
+        result.parsed++;
+      } catch (err) {
+        result.errors.push({
+          url: getResultLink(item) ?? url,
+          stage: 'parse',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // Enriquecer con detail-fetch si se pidió.
+  if (opts.enrichWithDetail) {
+    for (const item of items) {
+      try {
+        await enrichWithDetail(item);
+      } catch (err) {
+        result.errors.push({
+          url: item.source_url,
+          stage: 'fetch',
+          message: `enrich: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+  }
+
+  // Upsert batch.
+  if (items.length > 0) {
+    try {
+      const r = await upsertBatch(items);
+      result.upserted = r.inserted + r.updated;
+      result.duplicates = r.duplicates;
+      for (const e of r.errors) {
+        result.errors.push({ url: e.url, stage: 'upsert', message: e.error });
+      }
+    } catch (err) {
+      result.errors.push({
+        url: '<batch>',
+        stage: 'upsert',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return finalize(result, t0);
 }
 
-// Decodifica los chunks self.__next_f.push([1, "..."]) de una página detalle.
-// Por implementar Día 3.
-export function extractRscPayload(_html: string): string {
-  // TODO: regex /self\.__next_f\.push\(\[1,\s*"((?:\\.|[^"\\])*)"\]\)/g
-  // → unescape \", \\n → concatenar → buscar JSON con keys conocidas
-  return '';
+function finalize(result: ScrapeResult, t0: number): ScrapeResult {
+  result.finishedAt = new Date().toISOString();
+  result.durationMs = Date.now() - t0;
+  return result;
+}
+
+// ============================================================================
+// PARSER RSC
+// ============================================================================
+
+/**
+ * Extrae todos los chunks `self.__next_f.push([1, "<contenido>"])` y los
+ * decodifica (escapes JS → string crudo).
+ */
+export function extractRscChunks(html: string): string[] {
+  const re = /self\.__next_f\.push\(\[1,\s*"((?:\\.|[^"\\])*)"\]\)/g;
+  const out: string[] = [];
+  for (const m of html.matchAll(re)) {
+    try {
+      out.push(JSON.parse('"' + m[1] + '"'));
+    } catch {
+      // chunk malformado — skip
+    }
+  }
+  return out;
+}
+
+/**
+ * Localiza el chunk decodificado que contiene el array `results` con los
+ * listings y devuelve el array parseado.
+ */
+export function extractSearchResults(chunks: string[]): unknown[] | null {
+  for (const c of chunks) {
+    if (!c.includes('"results":[') || !c.includes('"midinmueble":"')) continue;
+    const startKey = c.indexOf('"results":[');
+    const startBracket = startKey + '"results":'.length; // posición del `[`
+    const arrayJson = balanceExtract(c, startBracket, '[', ']');
+    if (!arrayJson) continue;
+    try {
+      const parsed = JSON.parse(arrayJson);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // probar siguiente chunk
+    }
+  }
+  return null;
+}
+
+/**
+ * Localiza el chunk de un detail page y devuelve el objeto `data` con
+ * coordinates, comment, images, etc.
+ */
+export function extractDetailData(chunks: string[]): Record<string, any> | null {
+  for (const c of chunks) {
+    if (!c.includes('"propertyId":"') || !c.includes('"propertyType":')) continue;
+    const m = c.match(/"data":\{/);
+    if (!m || m.index == null) continue;
+    const startBrace = m.index + '"data":'.length; // posición del `{`
+    const objJson = balanceExtract(c, startBrace, '{', '}');
+    if (!objJson) continue;
+    try {
+      const parsed = JSON.parse(objJson);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // siguiente
+    }
+  }
+  return null;
+}
+
+/**
+ * Walks forward from `startIdx` (apuntando a `openChar`) hasta encontrar
+ * el matching `closeChar`. Respeta strings JSON con escapes.
+ * Devuelve el substring inclusive (con ambos delimitadores).
+ */
+function balanceExtract(
+  text: string,
+  startIdx: number,
+  openChar: string,
+  closeChar: string
+): string | null {
+  if (text[startIdx] !== openChar) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (ch === '\\') {
+      esc = true;
+      continue;
+    }
+    if (inStr) {
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === openChar) depth++;
+    else if (ch === closeChar) {
+      depth--;
+      if (depth === 0) return text.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// MAPEO RESULT → ScrapedProperty
+// ============================================================================
+
+interface M2SearchResult {
+  midinmueble?: string;
+  link?: string;
+  title?: string;
+  imageLink?: string;
+  mtipoinmueble?: { id?: string; nombre?: string };
+  mtiponegocio?: string;
+  mvalorventa?: number | null;
+  mvalorarriendo?: number | null;
+  marea?: number | null;
+  areaprivada?: number | null;
+  mnrocuartos?: number | string | null;
+  mnrobanos?: number | string | null;
+  mciudad?: { id?: string; nombre?: string };
+  mbarrio?: string | null;
+  mzona?: string | null;
+  mestadoinmueble?: string;
+  mnombreproyecto?: string | null;
+}
+
+function getResultLink(item: unknown): string | null {
+  if (!item || typeof item !== 'object') return null;
+  const link = (item as M2SearchResult).link;
+  return typeof link === 'string' ? link : null;
+}
+
+export function mapSearchResultToProperty(
+  raw: unknown,
+  searchUrl: string
+): ScrapedProperty | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as M2SearchResult;
+
+  // Necesitamos al menos: link (URL), tipo, ciudad, precio.
+  if (!r.link || typeof r.link !== 'string') return null;
+  if (!r.midinmueble) return null;
+
+  const propertyType = mapPropertyType(r.mtipoinmueble?.nombre ?? '');
+  if (!propertyType) return null;
+
+  // Determinar listing_type: la operación viene en mtiponegocio o por
+  // qué precio está poblado. Search URL contiene la operación también.
+  const listingType = inferListingType(r, searchUrl);
+  if (!listingType) return null;
+
+  // Precio según operación.
+  const price =
+    listingType === 'venta'
+      ? toPositive(r.mvalorventa)
+      : toPositive(r.mvalorarriendo);
+  if (!price) return null;
+
+  // URL absoluta.
+  const sourceUrl = r.link.startsWith('http') ? r.link : `${M2_BASE}${r.link}`;
+
+  // Ciudad y barrio.
+  const city =
+    canonicalCity(r.mciudad?.nombre ?? '') ?? r.mciudad?.nombre ?? 'Bogotá';
+  const neighborhood = r.mbarrio ? prettifyAllCaps(r.mbarrio) : undefined;
+
+  // Specs: bedrooms/bathrooms pueden venir como number o string ("3").
+  const bedrooms = toNonNegativeInt(r.mnrocuartos);
+  const bathrooms = toNonNegativeInt(r.mnrobanos);
+  // marea puede ser float (ej 29.58) — redondeamos a entero más cercano.
+  const area_m2 = toNonNegativeInt(r.marea ?? r.areaprivada);
+
+  // Photos: 1 sola en search. Si imageLink está vacío, omitir.
+  const photos = r.imageLink ? [r.imageLink] : [];
+
+  // Title: preferir el del payload, fallback construido.
+  const title = normalizeWhitespace(r.title ?? `${propertyType} en ${city}`);
+
+  return {
+    source_portal: 'metrocuadrado',
+    source_url: sourceUrl,
+    title,
+    description: undefined, // solo en detail page
+    price_cop: price,
+    city,
+    neighborhood,
+    bedrooms: bedrooms ?? undefined,
+    bathrooms: bathrooms ?? undefined,
+    area_m2: area_m2 ?? undefined,
+    property_type: propertyType,
+    listing_type: listingType,
+    photos,
+    latitude: undefined, // solo en detail page
+    longitude: undefined,
+  };
+}
+
+function inferListingType(r: M2SearchResult, searchUrl: string): ListingType | null {
+  const negocio = (r.mtiponegocio ?? '').toLowerCase();
+  if (negocio === 'venta') return 'venta';
+  if (negocio === 'arriendo' || negocio === 'alquiler') return 'arriendo';
+  if (toPositive(r.mvalorventa)) return 'venta';
+  if (toPositive(r.mvalorarriendo)) return 'arriendo';
+  // Fallback: del path del search URL.
+  if (searchUrl.includes('/venta/')) return 'venta';
+  if (searchUrl.includes('/arriendo/')) return 'arriendo';
+  return null;
+}
+
+function toPositive(v: unknown): number | null {
+  const n = typeof v === 'string' ? Number(v) : (v as number);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+function toNonNegativeInt(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'string' ? parseInteger(v) : Math.round(v as number);
+  if (n == null || !Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+function prettifyAllCaps(s: string): string {
+  return s
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+// ============================================================================
+// ENRIQUECIMIENTO OPCIONAL (detail page)
+// ============================================================================
+
+interface M2DetailData {
+  coordinates?: { lat?: number; lon?: number };
+  comment?: string;
+  images?: Array<{ image?: string; imageMobile?: string }>;
+}
+
+export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
+  const html = await fetchText(item.source_url, { userAgent: M2_UA });
+  const chunks = extractRscChunks(html);
+  const data = extractDetailData(chunks) as M2DetailData | null;
+  if (!data) return;
+  if (typeof data.coordinates?.lat === 'number') item.latitude = data.coordinates.lat;
+  if (typeof data.coordinates?.lon === 'number') item.longitude = data.coordinates.lon;
+  if (data.comment) item.description = normalizeWhitespace(data.comment);
+  if (Array.isArray(data.images) && data.images.length > 0) {
+    const urls = data.images.map((img) => img?.image).filter((u): u is string => !!u);
+    if (urls.length > 0) item.photos = urls;
+  }
 }
