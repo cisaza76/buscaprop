@@ -5,11 +5,13 @@
 // IMPORTANTE: este archivo se ejecuta server-side (scrapers / cron job).
 // Usa la SERVICE_ROLE_KEY para saltarse RLS.
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { dedupeHash } from './dedupe';
 import type { ScrapedProperty } from './types';
 
-function getServerClient() {
+let cachedClient: SupabaseClient | null = null;
+function getServerClient(): SupabaseClient {
+  if (cachedClient) return cachedClient;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
@@ -18,7 +20,24 @@ function getServerClient() {
         'definidas en .env.local (lado server, NUNCA exponer al cliente)'
     );
   }
-  return createClient(url, key, { auth: { persistSession: false } });
+  cachedClient = createClient(url, key, { auth: { persistSession: false } });
+  return cachedClient;
+}
+
+// Detecta si la BD tiene la columna dedup_hash (depende de migración 003).
+// Cacheado para no hacer la sniff query en cada upsert.
+let hasDedupHashColumn: boolean | null = null;
+async function detectDedupHashColumn(supabase: SupabaseClient): Promise<boolean> {
+  if (hasDedupHashColumn !== null) return hasDedupHashColumn;
+  const { error } = await supabase.from('properties').select('dedup_hash').limit(1);
+  hasDedupHashColumn = !error;
+  if (!hasDedupHashColumn) {
+    console.warn(
+      `⚠️  Columna 'dedup_hash' no disponible (${error?.code ?? 'unknown'}). ` +
+        'Cross-portal dedup desactivado. Run supabase/migrations/003_add_dedup_hash.sql.'
+    );
+  }
+  return hasDedupHashColumn;
 }
 
 export interface UpsertOutcome {
@@ -29,25 +48,25 @@ export interface UpsertOutcome {
 
 export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome> {
   const supabase = getServerClient();
-  const hash = dedupeHash(p);
+  const dedupAvailable = await detectDedupHashColumn(supabase);
 
-  // 1. Buscar canonical existente por hash (excluyendo este portal).
-  //    Si hay match en otro portal → marcar como duplicate.
-  const { data: existing } = await supabase
-    .from('properties')
-    .select('id, source_portal, is_duplicate')
-    .eq('dedup_hash', hash)
-    .neq('source_portal', p.source_portal)
-    .eq('is_duplicate', false)
-    .limit(1)
-    .maybeSingle();
-
-  const canonicalId = existing?.id ?? null;
+  let canonicalId: string | null = null;
+  let hash: string | null = null;
+  if (dedupAvailable) {
+    hash = dedupeHash(p);
+    const { data: existing } = await supabase
+      .from('properties')
+      .select('id, source_portal, is_duplicate')
+      .eq('dedup_hash', hash)
+      .neq('source_portal', p.source_portal)
+      .eq('is_duplicate', false)
+      .limit(1)
+      .maybeSingle();
+    canonicalId = existing?.id ?? null;
+  }
   const isDuplicate = !!canonicalId;
 
-  // 2. Upsert con la unique constraint (source_portal, source_url).
-  //    Postgres "ON CONFLICT" lo maneja Supabase con onConflict.
-  const row = {
+  const row: Record<string, unknown> = {
     source_portal: p.source_portal,
     source_url: p.source_url,
     title: p.title,
@@ -65,9 +84,9 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
     longitude: p.longitude ?? null,
     is_duplicate: isDuplicate,
     canonical_id: canonicalId,
-    dedup_hash: hash,
     scraped_at: p.scraped_at ?? new Date().toISOString(),
   };
+  if (dedupAvailable && hash) row.dedup_hash = hash;
 
   const { data: upserted, error } = await supabase
     .from('properties')
@@ -86,6 +105,24 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
     duplicateOf: canonicalId ?? undefined,
     id: upserted.id,
   };
+}
+
+// Convierte errores opacos de Supabase ({code, details, hint, message}) o
+// Error nativos a un string informativo. Sin esto, JSON.stringify de un
+// PostgrestError emite "[object Object]".
+function formatError(e: unknown): string {
+  if (!e) return 'unknown error';
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'object') {
+    const o = e as Record<string, unknown>;
+    const parts: string[] = [];
+    if (o.code) parts.push(`code=${o.code}`);
+    if (o.message) parts.push(String(o.message));
+    if (o.details) parts.push(`details=${o.details}`);
+    if (o.hint) parts.push(`hint=${o.hint}`);
+    return parts.length ? parts.join(' | ') : JSON.stringify(o);
+  }
+  return String(e);
 }
 
 // Batch helper para procesar arrays de scraped properties.
@@ -107,10 +144,7 @@ export async function upsertBatch(items: ScrapedProperty[]): Promise<{
       else updated++;
       if (r.duplicateOf) duplicates++;
     } catch (e) {
-      errors.push({
-        url: item.source_url,
-        error: e instanceof Error ? e.message : String(e),
-      });
+      errors.push({ url: item.source_url, error: formatError(e) });
     }
   }
 

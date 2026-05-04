@@ -1,12 +1,17 @@
 // scripts/scrape-once.ts
 // CLI para ejecutar los scrapers manualmente desde la terminal.
-// Uso (desde Día 2 cuando los scrapers existan):
+// Uso:
 //   npx tsx scripts/scrape-once.ts [--portal fincaraiz] [--max 50]
 //
 // Útil para:
 //   - smoke testing de un scraper específico
 //   - poblar la BD localmente sin esperar al cron
 //   - debug en desarrollo
+
+// Cargar .env.local antes de cualquier import que dependa de env vars.
+import dotenv from 'dotenv';
+import path from 'path';
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 import { runAllScrapers } from '../lib/scrapers/runner';
 import type { SourcePortal } from '../lib/scrapers/shared/types';
