@@ -4,8 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Navbar } from '@/components/shared/Navbar';
-import { SearchBar } from '@/components/dashboard/SearchBar';
-import { AdvancedFilters } from '@/components/dashboard/AdvancedFilters';
+import { SearchHeader } from '@/components/dashboard/SearchHeader';
 import { ResultsGrid } from '@/components/dashboard/ResultsGrid';
 import { SavedSearchesSidebar } from '@/components/dashboard/SavedSearchesSidebar';
 import { useProperties, type PropertyFilters } from '@/hooks/useProperties';
@@ -29,17 +28,16 @@ export default function DashboardPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // Texto libre → ILIKE sobre title. Compone con filtros estructurados (AND).
   const handleSearch = (query: string) => {
     const trimmed = query.trim();
     setSearchQuery(trimmed);
-    // Búsqueda de texto libre sobre title (ILIKE en searchProperties).
-    // Compone con los filtros estructurados existentes (city, neighborhood,
-    // tipo, etc) — todo se aplica como AND.
     runSearch({ ...filters, query: trimmed || undefined }, 1);
   };
 
-  const handleApplyFilters = (next: PropertyFilters) => {
-    runSearch(next, 1);
+  // Cualquier cambio de chip/dropdown dispara búsqueda inmediata (Zillow UX).
+  const handleFiltersChange = (next: PropertyFilters) => {
+    runSearch({ ...next, query: searchQuery || undefined }, 1);
   };
 
   const handleClearFilters = () => {
@@ -49,13 +47,14 @@ export default function DashboardPage() {
 
   const handleSaveSearch = async (query: string) => {
     if (!user) return;
-    const label = query.trim() || describeFilters(filters);
+    const filtersToSave = { ...filters, query: query.trim() || undefined };
+    const label = query.trim() || describeFilters(filtersToSave);
     if (!label) {
       setToast('Escribe una consulta o aplica filtros antes de guardar.');
       return;
     }
     try {
-      await savedSearches.create(label, filters);
+      await savedSearches.create(label, filtersToSave);
       setToast('Búsqueda guardada ✓');
     } catch (err) {
       console.error(err);
@@ -64,40 +63,36 @@ export default function DashboardPage() {
   };
 
   const handleSelectSavedSearch = (s: SavedSearch) => {
-    setSearchQuery(s.search_query);
-    runSearch((s.filters ?? {}) as PropertyFilters, 1);
+    const f = (s.filters ?? {}) as PropertyFilters;
+    setSearchQuery(f.query ?? s.search_query ?? '');
+    runSearch(f, 1);
   };
 
   return (
     <>
       <Navbar />
 
+      <SearchHeader
+        filters={filters}
+        searchQuery={searchQuery}
+        isSearching={isLoading}
+        onSearch={handleSearch}
+        onSave={handleSaveSearch}
+        onFiltersChange={handleFiltersChange}
+        onClear={handleClearFilters}
+        resultsCount={properties.length}
+      />
+
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          {agency && (
-            <p className="text-sm text-gray-500 mt-1">
-              {agency.name} · Plan <span className="capitalize">{agency.plan}</span> ·{' '}
-              {agency.subscription_status === 'trial' ? 'Prueba gratuita' : agency.subscription_status}
-            </p>
-          )}
-        </div>
+        {agency && (
+          <p className="text-sm text-gray-500 mb-4">
+            {agency.name} · Plan <span className="capitalize">{agency.plan}</span> ·{' '}
+            {agency.subscription_status === 'trial' ? 'Prueba gratuita' : agency.subscription_status}
+          </p>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6">
           <div className="space-y-4 min-w-0">
-            <SearchBar
-              initialQuery={searchQuery}
-              onSearch={handleSearch}
-              onSave={handleSaveSearch}
-              isSearching={isLoading}
-            />
-
-            <AdvancedFilters
-              filters={filters}
-              onApply={handleApplyFilters}
-              onClear={handleClearFilters}
-            />
-
             <ResultsGrid
               properties={properties}
               isLoading={isLoading}
@@ -107,7 +102,7 @@ export default function DashboardPage() {
             />
           </div>
 
-          <div className="lg:sticky lg:top-20 lg:self-start">
+          <div className="hidden lg:block lg:sticky lg:top-[200px] lg:self-start">
             <SavedSearchesSidebar
               searches={savedSearches.searches}
               isLoading={savedSearches.isLoading}
