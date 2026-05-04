@@ -20,6 +20,7 @@ export const PAGE_SIZE = 20;
 
 export function useProperties() {
   const [properties, setProperties] = useState<Property[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -31,7 +32,7 @@ export function useProperties() {
       setError(null);
       try {
         const offset = (nextPage - 1) * PAGE_SIZE;
-        const { properties: results } = await searchProperties({
+        const { properties: results, count } = await searchProperties({
           query: nextFilters.query,
           city: nextFilters.city,
           neighborhood: nextFilters.neighborhood,
@@ -44,12 +45,14 @@ export function useProperties() {
           offset,
         });
         setProperties(results as Property[]);
+        setTotalCount(count ?? 0);
         setPage(nextPage);
         setFilters(nextFilters);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Error al buscar propiedades';
         setError(msg);
         setProperties([]);
+        setTotalCount(0);
       } finally {
         setIsLoading(false);
       }
@@ -64,6 +67,7 @@ export function useProperties() {
 
   const reset = useCallback(() => {
     setProperties([]);
+    setTotalCount(0);
     setFilters({});
     setPage(1);
     setError(null);
@@ -71,6 +75,7 @@ export function useProperties() {
 
   return {
     properties,
+    totalCount,
     isLoading,
     error,
     page,

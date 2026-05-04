@@ -219,9 +219,12 @@ export async function searchProperties(filters: {
   limit?: number;
   offset?: number;
 }) {
+  // count: 'exact' → PostgREST devuelve el total que matchea (ignorando
+  // range/limit). Sin esto, `count` venía null y la UI solo conocía el
+  // tamaño de página, no el total real.
   let query = supabase
     .from('properties')
-    .select('*')
+    .select('*', { count: 'exact' })
     .eq('is_duplicate', false);
 
   // Texto libre: ILIKE 'word%word%' sobre title. Insensible a mayúsculas/tildes.
@@ -250,7 +253,7 @@ export async function searchProperties(filters: {
 
   return {
     properties: data || [],
-    count,
+    count: count ?? 0,
   };
 }
 

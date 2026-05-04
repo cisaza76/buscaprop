@@ -13,7 +13,7 @@ import { describeFilters } from '@/lib/utils';
 
 export default function DashboardPage() {
   const { user, agency } = useAuth();
-  const { properties, isLoading, error, page, filters, runSearch, goToPage } = useProperties();
+  const { properties, totalCount, isLoading, error, page, filters, runSearch, goToPage } = useProperties();
   const savedSearches = useSavedSearches(user?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<string | null>(null);
@@ -80,7 +80,7 @@ export default function DashboardPage() {
         onSave={handleSaveSearch}
         onFiltersChange={handleFiltersChange}
         onClear={handleClearFilters}
-        resultsCount={properties.length}
+        resultsCount={totalCount}
       />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
@@ -95,6 +95,7 @@ export default function DashboardPage() {
           <div className="space-y-4 min-w-0">
             <ResultsGrid
               properties={properties}
+              totalCount={totalCount}
               isLoading={isLoading}
               error={error}
               page={page}

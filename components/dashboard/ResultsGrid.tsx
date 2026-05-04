@@ -8,13 +8,22 @@ import { cn } from '@/lib/utils';
 
 interface ResultsGridProps {
   properties: Property[];
+  /** Total de matches (para pagination + label "Página X de Y"). */
+  totalCount: number;
   isLoading: boolean;
   error: string | null;
   page: number;
   onPageChange: (page: number) => void;
 }
 
-export function ResultsGrid({ properties, isLoading, error, page, onPageChange }: ResultsGridProps) {
+export function ResultsGrid({
+  properties,
+  totalCount,
+  isLoading,
+  error,
+  page,
+  onPageChange,
+}: ResultsGridProps) {
   if (isLoading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -56,10 +65,12 @@ export function ResultsGrid({ properties, isLoading, error, page, onPageChange }
     );
   }
 
-  // Pagination — sin total exacto del servidor, usamos el tamaño del page actual
-  // como heurística (si vino lleno asumimos que hay siguiente).
-  const hasNext = properties.length === PAGE_SIZE;
+  // Pagination basada en el count exacto del servidor.
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const hasPrev = page > 1;
+  const hasNext = page < totalPages;
+  const rangeStart = (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, totalCount);
 
   return (
     <div className="space-y-6">
@@ -69,7 +80,7 @@ export function ResultsGrid({ properties, isLoading, error, page, onPageChange }
         ))}
       </div>
 
-      {(hasPrev || hasNext) && (
+      {totalPages > 1 && (
         <nav
           aria-label="Paginación de resultados"
           className="flex items-center justify-between border-t border-gray-200 pt-4"
@@ -87,7 +98,11 @@ export function ResultsGrid({ properties, isLoading, error, page, onPageChange }
           >
             ← Anterior
           </button>
-          <span className="text-sm text-gray-600">Página {page}</span>
+          <span className="text-sm text-gray-600">
+            <span className="font-semibold text-gray-900">{rangeStart}–{rangeEnd}</span> de{' '}
+            <span className="font-semibold text-gray-900">{totalCount.toLocaleString('es-CO')}</span>{' '}
+            <span className="text-gray-400">·</span> Página {page} de {totalPages}
+          </span>
           <button
             type="button"
             onClick={() => hasNext && onPageChange(page + 1)}
