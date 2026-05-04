@@ -75,9 +75,15 @@ export function PropertyCard({ property }: PropertyCardProps) {
           {where && <p className="text-sm text-gray-500 mt-1 line-clamp-1">{where}</p>}
         </div>
 
-        {/* CTA WhatsApp full-width verde */}
+        {/* CTA WhatsApp full-width verde — usa el contact_phone real del
+            agente cuando existe (post migración 004 + scrape). Si no, cae
+            al número genérico definido en NEXT_PUBLIC_BUSCAPROP_WHATSAPP. */}
         <div className="mt-auto pt-1 flex flex-col gap-2">
-          <WhatsAppButton property={property} variant="full" />
+          <WhatsAppButton
+            property={property}
+            phoneOverride={property.contact_phone}
+            variant="full"
+          />
           <Link
             href={`/property/${property.id}`}
             className="text-center text-sm text-teal-600 hover:text-teal-700 font-medium"

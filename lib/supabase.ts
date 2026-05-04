@@ -58,6 +58,12 @@ export interface Property {
   longitude?: number;
   is_duplicate: boolean;
   canonical_id?: string;
+  /** Agente o empresa que publicó (poblado por scrapers post-migration 004). */
+  contact_name?: string | null;
+  /** Teléfono del agente en E.164 sin '+' (formato wa.me/). null si no disponible. */
+  contact_phone?: string | null;
+  /** Nombre de la empresa/agencia. */
+  company_name?: string | null;
   created_at: string;
 }
 

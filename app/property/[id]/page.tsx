@@ -203,28 +203,42 @@ export default function PropertyDetailPage({ params }: PageProps) {
               </p>
 
               <div className="mt-4 space-y-2">
-                <WhatsAppButton property={property} variant="full" />
+                <WhatsAppButton
+                  property={property}
+                  phoneOverride={property.contact_phone}
+                  variant="full"
+                />
                 <p className="text-xs text-center text-gray-500">
-                  Te conectamos directo con la agencia
+                  {property.contact_phone
+                    ? 'Conectarte directo con el agente del listing'
+                    : 'Te conectamos vía BuscaProp'}
                 </p>
               </div>
 
-              {/* Agent placeholder — TODO: cuando tengamos contact_phone/name por listing */}
+              {/* Agente real cuando hay data; placeholder cuando no. */}
               <div className="mt-5 pt-4 border-t border-gray-100">
                 <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">
                   Publicado por
                 </p>
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-sm font-semibold">
-                    {portalLabel(property.source_portal)[0]}
+                  <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-sm font-semibold shrink-0">
+                    {(property.company_name ?? property.contact_name ?? portalLabel(property.source_portal))[0]?.toUpperCase()}
                   </div>
                   <div className="min-w-0">
                     <p className="font-medium text-gray-900 text-sm truncate">
-                      Agencia en {portalLabel(property.source_portal)}
+                      {property.company_name ??
+                        property.contact_name ??
+                        `Agencia en ${portalLabel(property.source_portal)}`}
                     </p>
-                    <p className="text-xs text-gray-500 truncate">
-                      Datos del agente disponibles en la publicación original
-                    </p>
+                    {property.contact_phone ? (
+                      <p className="text-xs text-gray-500 truncate" title="Teléfono del agente">
+                        +{property.contact_phone}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 truncate">
+                        Vía {portalLabel(property.source_portal)}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -235,7 +249,11 @@ export default function PropertyDetailPage({ params }: PageProps) {
 
       {/* Sticky bottom WhatsApp en mobile (lg:hidden) */}
       <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 px-4 py-3 shadow-lg">
-        <WhatsAppButton property={property} variant="full" />
+        <WhatsAppButton
+          property={property}
+          phoneOverride={property.contact_phone}
+          variant="full"
+        />
       </div>
     </>
   );
