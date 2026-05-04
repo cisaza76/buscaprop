@@ -3,15 +3,25 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 
 export function Navbar() {
   const { isAuthenticated, isOwner, userProfile, signOut } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } finally {
+      router.push('/');
+      router.refresh();
+    }
+  };
 
   const linkClass = (href: string) =>
     cn(
@@ -68,7 +78,7 @@ export function Navbar() {
                       {isOwner ? 'Propietario' : 'Agente'}
                     </div>
                     <button
-                      onClick={() => signOut()}
+                      onClick={handleSignOut}
                       className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
                     >
                       Cerrar sesión
@@ -125,7 +135,7 @@ export function Navbar() {
                   </Link>
                 )}
                 <button
-                  onClick={() => signOut()}
+                  onClick={handleSignOut}
                   className="block w-full text-left px-3 py-2 rounded-md text-sm font-medium text-red-600 hover:bg-red-50"
                 >
                   Cerrar sesión
