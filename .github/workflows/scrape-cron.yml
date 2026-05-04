@@ -1,0 +1,104 @@
+name: Scrape portales (cada 6h)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Por qué corremos los scrapers en el runner y NO vía webhook a Vercel:
+#
+# Los scrapers actuales tardan entre 7 min (Properati search-only) y 100 min
+# (Ciencuadras --max 1000 con detail-fetch). Vercel Functions tiene límite
+# de 300s (5 min) en plan Pro y 60s en Hobby. Un webhook /api/cron/scrape
+# saturaría esos timeouts antes de terminar siquiera un solo portal.
+#
+# GitHub Actions (free tier) permite jobs hasta 6 horas — espacio de sobra.
+# Además, los logs y reintentos quedan visibles en la pestaña Actions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # Cada 6 horas en punto. Hora UTC. Para Colombia (UTC-5):
+    # 00:00 UTC → 19:00 día anterior  ·  06:00 UTC → 01:00
+    # 12:00 UTC → 07:00                  18:00 UTC → 13:00
+    - cron: '0 */6 * * *'
+
+  # Permite trigger manual desde GitHub UI o `gh workflow run scrape-cron.yml`.
+  workflow_dispatch:
+    inputs:
+      portal:
+        description: 'Portal específico (vacío = todos)'
+        required: false
+        type: choice
+        default: ''
+        options:
+          - ''
+          - fincaraiz
+          - metrocuadrado
+          - properati
+          - ciencuadras
+      op:
+        description: 'Operación específica (vacío = ambas)'
+        required: false
+        type: choice
+        default: ''
+        options:
+          - ''
+          - venta
+          - arriendo
+      max:
+        description: 'Máx propiedades por portal'
+        required: false
+        type: string
+        default: '200'
+
+# Cancelar runs anteriores si llega uno nuevo del schedule (evita acumular).
+concurrency:
+  group: scrape-cron
+  cancel-in-progress: false # NO matar uno en progreso; solo encolar el siguiente
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # 3h max — Ciencuadras es el más lento
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run scrapers
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+
+          # Default scheduled run: --max 200 (sin filtros) ≈ 30 min total.
+          # workflow_dispatch puede pasar inputs.{portal,op,max}.
+          MAX="${{ inputs.max || '200' }}"
+          PORTAL="${{ inputs.portal || '' }}"
+          OP="${{ inputs.op || '' }}"
+
+          ARGS+=(--max "$MAX")
+          if [ -n "$PORTAL" ]; then ARGS+=(--portal "$PORTAL"); fi
+          if [ -n "$OP" ];     then ARGS+=(--op "$OP");         fi
+
+          echo "▶ npx tsx scripts/scrape-once.ts ${ARGS[*]}"
+          npx tsx scripts/scrape-once.ts "${ARGS[@]}"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Scrape completado · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Trigger: \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Portal: \`${{ inputs.portal || 'todos' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Op: \`${{ inputs.op || 'venta+arriendo' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Max: \`${{ inputs.max || '200' }}\`" >> $GITHUB_STEP_SUMMARY
