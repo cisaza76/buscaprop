@@ -257,6 +257,24 @@ export async function searchProperties(filters: {
   };
 }
 
+/**
+ * Fetch un property específico por su id (UUID). Devuelve null si no existe
+ * o si el caller no tiene permisos. RLS aplica igual que en searchProperties.
+ */
+export async function fetchPropertyById(id: string): Promise<Property | null> {
+  if (!id) return null;
+  const { data, error } = await supabase
+    .from('properties')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    console.error('Error obteniendo propiedad:', error);
+    return null;
+  }
+  return (data as Property | null) ?? null;
+}
+
 // Devuelve los barrios distintos que existen en una ciudad. PostgREST no
 // soporta SELECT DISTINCT, así que dedupeamos client-side. Limitamos a
 // 5000 filas — suficiente para extraer los ~50-200 barrios únicos por
