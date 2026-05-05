@@ -19,6 +19,27 @@ export type Channel = 'web' | 'whatsapp';
 export type ConversationStatus = 'active' | 'qualified' | 'escalated' | 'closed';
 export type MessageRole = 'user' | 'assistant' | 'tool';
 
+/**
+ * Preferencias estructuradas del usuario que la AI va descubriendo turno a turno.
+ * Es un patch — sólo guardamos lo que la AI confirmó. Cualquier campo puede ser
+ * null/undefined si todavía no se sabe.
+ */
+export interface ConversationPreferences {
+  city?: string;
+  neighborhood?: string;
+  property_type?: 'apartamento' | 'casa' | 'oficina' | 'lote';
+  listing_type?: 'venta' | 'arriendo';
+  min_bedrooms?: number;
+  min_bathrooms?: number;
+  min_price?: number;
+  max_price?: number;
+  parking_required?: boolean;
+  urgency?: 'inmediato' | '1-3 meses' | '+3 meses';
+  financing_needed?: boolean;
+  /** Texto libre con cualquier requisito que no entre en los slots de arriba. */
+  notes?: string;
+}
+
 export interface Conversation {
   id: string;
   channel: Channel;
@@ -32,6 +53,7 @@ export interface Conversation {
   last_message_at: string;
   created_at: string;
   updated_at: string;
+  preferences: ConversationPreferences;
 }
 
 export interface ConversationMessage {
@@ -70,7 +92,7 @@ export async function getOrCreateWebConversation(
     .limit(1)
     .maybeSingle();
 
-  if (existing) return existing as Conversation;
+  if (existing) return normalizeConversation(existing as Record<string, unknown>);
 
   // Crear nueva.
   const { data: created, error } = await sb
@@ -86,13 +108,25 @@ export async function getOrCreateWebConversation(
   if (error || !created) {
     throw new Error(`No se pudo crear conversation: ${error?.message ?? 'unknown'}`);
   }
-  return created as Conversation;
+  return normalizeConversation(created as Record<string, unknown>);
 }
 
 export async function getConversation(id: string): Promise<Conversation | null> {
   const sb = getServerClient();
   const { data } = await sb.from('conversations').select('*').eq('id', id).maybeSingle();
-  return (data as Conversation | null) ?? null;
+  if (!data) return null;
+  return normalizeConversation(data as Record<string, unknown>);
+}
+
+/**
+ * Asegura que la row tenga un `preferences` válido, incluso si la columna
+ * todavía no existe (migration 006 no aplicada → field ausente).
+ */
+function normalizeConversation(row: Record<string, unknown>): Conversation {
+  return {
+    ...(row as unknown as Conversation),
+    preferences: (row.preferences as ConversationPreferences | null) ?? {},
+  };
 }
 
 // ============================================================================
@@ -178,26 +212,105 @@ export async function promoteToLead(args: {
     return { id: existing.id as string, alreadyExisted: true };
   }
 
-  const { data, error } = await sb
-    .from('leads')
-    .insert({
+  // Intentamos insertar con todas las columnas. Si alguna falta en el schema
+  // (migration parcial), reintentamos con un payload mínimo + log.
+  const fullPayload: Record<string, unknown> = {
+    conversation_id: args.conversationId,
+    property_id: args.propertyId ?? null,
+    agency_id: args.agencyId ?? null,
+    lead_score: args.leadScore,
+    summary: args.summary ?? null,
+  };
+
+  let inserted = await sb.from('leads').insert(fullPayload).select('id').single();
+  // PostgREST devuelve "Could not find the '<col>' column ... in the schema cache"
+  // o "column ... does not exist" según el path. Capturamos ambos.
+  const isSchemaMissingError = (msg: string | undefined) =>
+    !!msg && (/column .* does not exist/i.test(msg) || /could not find.*column/i.test(msg));
+
+  if (inserted.error && isSchemaMissingError(inserted.error.message)) {
+    console.warn(
+      `[promoteToLead] schema incompleto (${inserted.error.message}). ` +
+        `Reintentando con payload mínimo. Aplicá la migration 007.`
+    );
+    const minimalPayload = {
       conversation_id: args.conversationId,
       property_id: args.propertyId ?? null,
-      agency_id: args.agencyId ?? null,
       lead_score: args.leadScore,
-      summary: args.summary ?? null,
-    })
-    .select('id')
-    .single();
-  if (error || !data) throw new Error(`promoteToLead failed: ${error?.message}`);
+    };
+    inserted = await sb.from('leads').insert(minimalPayload).select('id').single();
+  }
+  if (inserted.error || !inserted.data) {
+    throw new Error(`promoteToLead failed: ${inserted.error?.message}`);
+  }
 
-  // Sincronizar status en conversations.
+  // Sincronizar status en conversations (esta sí existe siempre).
   await sb
     .from('conversations')
     .update({ status: 'qualified' })
     .eq('id', args.conversationId);
 
-  return { id: data.id as string, alreadyExisted: false };
+  return { id: inserted.data.id as string, alreadyExisted: false };
+}
+
+// ============================================================================
+// Preferences + contact updates (tools recordUserPreferences / requestContact)
+// ============================================================================
+
+/**
+ * Hace MERGE shallow de preferences. Sólo sobreescribe las keys provistas en
+ * `patch` — el resto se conserva. Si `patch` trae { city: undefined } NO borra
+ * la key existente (filtramos undefined antes del merge).
+ */
+export async function updatePreferences(
+  conversationId: string,
+  patch: ConversationPreferences
+): Promise<ConversationPreferences> {
+  const sb = getServerClient();
+
+  // Filtrar undefined (no queremos borrar keys que ya estaban set).
+  const cleanPatch: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) cleanPatch[k] = v;
+  }
+  if (Object.keys(cleanPatch).length === 0) {
+    // Nada que actualizar — devolver lo actual.
+    const conv = await getConversation(conversationId);
+    return conv?.preferences ?? {};
+  }
+
+  // Read-modify-write. Concurrencia: si dos tools del mismo turno actualizan
+  // simultáneamente, el último gana — aceptable para nuestro caso (un solo loop).
+  const current = (await getConversation(conversationId))?.preferences ?? {};
+  const merged = { ...current, ...cleanPatch };
+
+  const { error } = await sb
+    .from('conversations')
+    .update({ preferences: merged })
+    .eq('id', conversationId);
+  if (error) throw new Error(`updatePreferences failed: ${error.message}`);
+  return merged as ConversationPreferences;
+}
+
+/**
+ * Setea user_phone en la conversación. Idempotente — si ya estaba set con el
+ * mismo valor no hace nada. Normaliza a sólo dígitos (sin '+', '-', espacios).
+ */
+export async function setUserPhone(
+  conversationId: string,
+  phoneRaw: string
+): Promise<string> {
+  const sb = getServerClient();
+  const phone = phoneRaw.replace(/\D/g, '');
+  if (phone.length < 7) {
+    throw new Error(`Teléfono inválido: ${phoneRaw}`);
+  }
+  const { error } = await sb
+    .from('conversations')
+    .update({ user_phone: phone })
+    .eq('id', conversationId);
+  if (error) throw new Error(`setUserPhone failed: ${error.message}`);
+  return phone;
 }
 
 // ============================================================================

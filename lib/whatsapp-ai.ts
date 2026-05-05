@@ -23,6 +23,7 @@ import {
   listMessages,
   updateLeadScore,
   promoteToLead,
+  getConversation,
   type Conversation,
   type ConversationMessage,
 } from './ai/conversation';
@@ -84,6 +85,8 @@ export async function generateAIResponse(
   const toolsUsed: string[] = [];
   let finalText = '';
   let truncated = true;
+  // Set por requestContact tool — fuerza promoción a lead al final del turn.
+  let contactRecorded = false;
 
   // Validar invariante del history rehidratado antes del primer call.
   validateMessages(messages);
@@ -177,21 +180,23 @@ export async function generateAIResponse(
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const block of toolUseBlocks) {
       toolsUsed.push(block.name);
-      const { result, isError } = await executeTool(
+      const exec = await executeTool(
         block.name,
-        block.input as Record<string, unknown>
+        block.input as Record<string, unknown>,
+        { conversationId: conversation.id }
       );
+      if (exec.contactRecorded) contactRecorded = true;
       toolResults.push({
         type: 'tool_result',
         tool_use_id: block.id,
-        content: result,
-        is_error: isError,
+        content: exec.result,
+        is_error: exec.isError,
       });
       // Persistir el tool result en DB.
       await appendMessage(conversation.id, {
         role: 'tool',
-        content: result,
-        tool_result: { tool_use_id: block.id, result, is_error: isError },
+        content: exec.result,
+        tool_result: { tool_use_id: block.id, result: exec.result, is_error: exec.isError },
       });
     }
 
@@ -212,12 +217,20 @@ export async function generateAIResponse(
     .flatMap((m) => m.tool_calls ?? [])
     .map((t) => t.name);
 
+  // Re-leer la conversación para tener preferences + user_phone actualizados
+  // (las tools recordUserPreferences y requestContact los updatearon).
+  const refreshed = await getConversation(conversation.id);
+  const preferences = refreshed?.preferences ?? {};
+  const phoneOnRecord = !!refreshed?.user_phone;
+
   const breakdown = calculateLeadScore({
     userMessageCount: allMessages.filter((m) => m.role === 'user').length,
     userTextCombined: userTexts.toLowerCase(),
     toolsUsed: allToolsUsed,
     visitScheduled: allToolsUsed.includes('scheduleVisit'),
     mentionedProperty: allToolsUsed.includes('fetchPropertyById'),
+    contactProvided: contactRecorded || phoneOnRecord,
+    preferenceCriteriaCount: Object.keys(preferences).length,
   });
 
   const wasQualified = isQualifiedLead(conversation.lead_score);

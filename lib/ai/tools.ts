@@ -15,6 +15,16 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { searchProperties, fetchPropertyById } from '@/lib/supabase';
 import { formatCOP, portalLabel } from '@/lib/utils';
+import {
+  updatePreferences,
+  setUserPhone,
+  type ConversationPreferences,
+} from '@/lib/ai/conversation';
+import {
+  analyzeNeighborhood,
+  findComparables,
+  simulateCredit,
+} from '@/lib/ai/analytics';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tool schemas — enviadas al modelo en cada request. Cacheadas en el prefix.
@@ -83,6 +93,187 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'recordUserPreferences',
+    description:
+      'Guarda los criterios de búsqueda que el usuario fue revelando en la conversación, para no ' +
+      're-preguntar y para que el agente humano vea de un vistazo qué busca el lead. Llamala UNA vez ' +
+      'por turno cuando descubras nueva info, sólo con los campos NUEVOS o que cambiaron — los demás ' +
+      'se conservan. Ej: si en turn 1 ya guardaste {city, max_price} y en turn 2 el user dice "con garaje", ' +
+      'pasá sólo { parking_required: true }.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        city: {
+          type: 'string',
+          description: 'Ciudad (ej: "Bogotá", "Medellín").',
+        },
+        neighborhood: {
+          type: 'string',
+          description: 'Barrio específico mencionado por el user.',
+        },
+        property_type: {
+          type: 'string',
+          enum: ['apartamento', 'casa', 'oficina', 'lote'],
+        },
+        listing_type: {
+          type: 'string',
+          enum: ['venta', 'arriendo'],
+        },
+        min_bedrooms: { type: 'number' },
+        min_bathrooms: { type: 'number' },
+        min_price: {
+          type: 'number',
+          description: 'Precio mínimo en COP (sin separadores).',
+        },
+        max_price: {
+          type: 'number',
+          description: 'Precio máximo en COP (sin separadores).',
+        },
+        parking_required: {
+          type: 'boolean',
+          description: 'true si el user dijo que NECESITA garaje/parqueadero.',
+        },
+        urgency: {
+          type: 'string',
+          enum: ['inmediato', '1-3 meses', '+3 meses'],
+        },
+        financing_needed: {
+          type: 'boolean',
+          description: 'true si el user mencionó que va a usar crédito hipotecario o leasing.',
+        },
+        notes: {
+          type: 'string',
+          description:
+            'Texto libre para cualquier requisito que no entre en los slots de arriba ' +
+            '(ej: "vista al parque", "edificio con piscina", "amoblado").',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'requestContact',
+    description:
+      'El usuario te dio su teléfono (10 dígitos colombianos) y quiere que un agente humano lo ' +
+      'contacte. Esta tool dispara la creación del lead — un asesor humano va a tomar la conversación. ' +
+      'Llamala SÓLO cuando el user efectivamente compartió su número (no cuando dijo "después te lo paso").',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        phone: {
+          type: 'string',
+          description:
+            'Teléfono colombiano. 10 dígitos comenzando con 3 (ej: "3001234567"). Aceptá ' +
+            '"+57 300 123 4567" pero pasalo como sólo dígitos.',
+        },
+        preferred_time: {
+          type: 'string',
+          description:
+            'Cuándo prefiere ser contactado (texto libre: "ya", "esta tarde", "mañana en la mañana").',
+        },
+        preferred_method: {
+          type: 'string',
+          enum: ['whatsapp', 'llamada'],
+          description: 'Cómo prefiere el contacto.',
+        },
+      },
+      required: ['phone'],
+    },
+  },
+  {
+    name: 'analyzeNeighborhood',
+    description:
+      'Devuelve un análisis estadístico real de un barrio o ciudad: cantidad de propiedades disponibles, ' +
+      'precio promedio, mediana, precio promedio por m², distribución por habitaciones y por portal. ' +
+      'Útil para darle al user CONTEXTO de mercado antes/después de mostrarle resultados — para que sepa ' +
+      'si el precio que está viendo es alto, bajo o promedio. ' +
+      'IMPORTANTE: las métricas se devuelven con guardas de sample size — si total_available < 5, ' +
+      'avg_price_cop es null y NO debés inventar el dato. Si hay un warning, mostralo al user. ' +
+      'Llamala UNA vez por barrio/zona — no la repitas con los mismos filtros.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        city: {
+          type: 'string',
+          description: 'Ciudad (con tilde, ej: "Bogotá"). Requerido.',
+        },
+        neighborhood: {
+          type: 'string',
+          description: 'Barrio específico. Si lo omitís, analiza toda la ciudad.',
+        },
+        property_type: {
+          type: 'string',
+          enum: ['apartamento', 'casa', 'oficina', 'lote'],
+        },
+        listing_type: {
+          type: 'string',
+          enum: ['venta', 'arriendo'],
+        },
+        min_price: {
+          type: 'number',
+          description: 'Precio mínimo en COP. Útil para acotar el análisis al rango del user.',
+        },
+        max_price: {
+          type: 'number',
+          description: 'Precio máximo en COP.',
+        },
+      },
+      required: ['city'],
+    },
+  },
+  {
+    name: 'findComparables',
+    description:
+      'Para una propiedad específica, busca hasta 5 propiedades comparables: mismo barrio, mismo ' +
+      'tipo, ±10% precio, ±1 habitación. Cada comparable incluye su \`price_diff_pct\` (negativo = ' +
+      'más barato que la referencia). Útil después de que el user mostró interés en una propiedad ' +
+      'concreta, para validar si el precio es de mercado u ofrecer alternativas similares. ' +
+      'Si no hay comparables, mostrá el warning — no inventes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        property_id: {
+          type: 'string',
+          description:
+            'UUID de la propiedad de referencia (de los resultados de searchProperties).',
+        },
+        limit: {
+          type: 'number',
+          description: 'Cuántos comparables devolver. Default 5, máximo 10.',
+        },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
+    name: 'simulateCredit',
+    description:
+      'Calcula la cuota mensual estimada de un crédito hipotecario con tasa promedio del mercado ' +
+      'colombiano (12% E.A. por default). Útil cuando el user pregunta sobre financiación o ' +
+      '"cuánto pagaría al mes" para una propiedad. ' +
+      'OBLIGATORIO: cuando muestres el resultado al user, transcribí o parafraseá el campo ' +
+      '`disclaimer` para que sepa que es estimado y la tasa real depende del banco. ' +
+      'Si el user pidió un plazo o cuota inicial específica, pasalos en down_payment_cop / years.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        price_cop: {
+          type: 'number',
+          description: 'Precio de la propiedad en COP (sin separadores). Ej: 550000000.',
+        },
+        down_payment_cop: {
+          type: 'number',
+          description: 'Cuota inicial en COP. Si el user no la dice, omití este campo (default 30%).',
+        },
+        years: {
+          type: 'number',
+          description: 'Plazo en años. Default 20. Mínimo 5, máximo 30.',
+        },
+      },
+      required: ['price_cop'],
+    },
+  },
+  {
     name: 'scheduleVisit',
     description:
       'Registra que el usuario quiere agendar una visita a una propiedad. NO confirma la visita — ' +
@@ -115,10 +306,29 @@ export const TOOLS: Anthropic.Tool[] = [
 // resultado serializado a string (formato típico para tool_result).
 // ──────────────────────────────────────────────────────────────────────────
 
+export interface ToolExecutionContext {
+  /** UUID de la conversación. Necesario para tools que persisten state. */
+  conversationId: string;
+}
+
+/**
+ * Resultado de un tool. Algunos tools setean flags que el motor lee al final
+ * del turn para reaccionar (ej: requestContact dispara promoción a lead).
+ */
+export interface ToolExecutionResult {
+  result: string;
+  isError: boolean;
+  /** True si la tool registró el teléfono del usuario en la conversación. */
+  contactRecorded?: boolean;
+  /** True si la tool actualizó las preferencias del usuario. */
+  preferencesUpdated?: boolean;
+}
+
 export async function executeTool(
   name: string,
-  input: Record<string, unknown>
-): Promise<{ result: string; isError: boolean }> {
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext
+): Promise<ToolExecutionResult> {
   try {
     switch (name) {
       case 'searchProperties':
@@ -127,6 +337,16 @@ export async function executeTool(
         return { result: await runFetchPropertyById(input), isError: false };
       case 'scheduleVisit':
         return { result: runScheduleVisit(input), isError: false };
+      case 'recordUserPreferences':
+        return await runRecordUserPreferences(input, ctx);
+      case 'requestContact':
+        return await runRequestContact(input, ctx);
+      case 'analyzeNeighborhood':
+        return { result: await runAnalyzeNeighborhood(input), isError: false };
+      case 'findComparables':
+        return { result: await runFindComparables(input), isError: false };
+      case 'simulateCredit':
+        return { result: runSimulateCredit(input), isError: false };
       default:
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
@@ -203,6 +423,138 @@ async function runFetchPropertyById(input: Record<string, unknown>): Promise<str
     null,
     2
   );
+}
+
+async function runRecordUserPreferences(
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext
+): Promise<ToolExecutionResult> {
+  // Tipar de forma segura: ConversationPreferences acepta cualquier subset.
+  const patch: ConversationPreferences = {};
+  const allowedKeys: Array<keyof ConversationPreferences> = [
+    'city',
+    'neighborhood',
+    'property_type',
+    'listing_type',
+    'min_bedrooms',
+    'min_bathrooms',
+    'min_price',
+    'max_price',
+    'parking_required',
+    'urgency',
+    'financing_needed',
+    'notes',
+  ];
+  for (const k of allowedKeys) {
+    if (input[k] !== undefined) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (patch as any)[k] = input[k];
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return {
+      result: 'No se recibieron campos para actualizar.',
+      isError: true,
+    };
+  }
+
+  const merged = await updatePreferences(ctx.conversationId, patch);
+  return {
+    result: JSON.stringify({
+      saved: patch,
+      current_preferences: merged,
+    }),
+    isError: false,
+    preferencesUpdated: true,
+  };
+}
+
+async function runRequestContact(
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext
+): Promise<ToolExecutionResult> {
+  const phoneRaw = input.phone as string | undefined;
+  if (!phoneRaw) {
+    return { result: 'Falta el teléfono.', isError: true };
+  }
+  // Validar formato colombiano: 10 dígitos comenzando con 3, opcional +57.
+  const digits = phoneRaw.replace(/\D/g, '');
+  // Aceptar 573XXXXXXXXX (12) o 3XXXXXXXXX (10).
+  let normalized: string;
+  if (digits.length === 12 && digits.startsWith('57')) {
+    normalized = digits.slice(2);
+  } else if (digits.length === 10 && digits.startsWith('3')) {
+    normalized = digits;
+  } else {
+    return {
+      result: `Formato inválido. Debe ser celular colombiano de 10 dígitos comenzando con 3 (recibí: "${phoneRaw}").`,
+      isError: true,
+    };
+  }
+
+  const phone = await setUserPhone(ctx.conversationId, normalized);
+  const preferredTime = (input.preferred_time as string) ?? 'lo antes posible';
+  const preferredMethod = (input.preferred_method as string) ?? 'whatsapp';
+
+  return {
+    result: JSON.stringify({
+      registered: true,
+      phone,
+      preferred_time: preferredTime,
+      preferred_method: preferredMethod,
+      next_step:
+        'Un agente humano va a contactar al usuario. El motor de scoring va a ' +
+        'promover esta conversación a lead automáticamente.',
+    }),
+    isError: false,
+    contactRecorded: true,
+  };
+}
+
+async function runAnalyzeNeighborhood(input: Record<string, unknown>): Promise<string> {
+  const city = input.city as string | undefined;
+  if (!city) return JSON.stringify({ error: 'Falta city.' });
+
+  const result = await analyzeNeighborhood({
+    city,
+    neighborhood: input.neighborhood as string | undefined,
+    property_type: input.property_type as
+      | 'apartamento'
+      | 'casa'
+      | 'oficina'
+      | 'lote'
+      | undefined,
+    listing_type: input.listing_type as 'venta' | 'arriendo' | undefined,
+    min_price: input.min_price as number | undefined,
+    max_price: input.max_price as number | undefined,
+  });
+  return JSON.stringify(result, null, 2);
+}
+
+async function runFindComparables(input: Record<string, unknown>): Promise<string> {
+  const propertyId = input.property_id as string | undefined;
+  if (!propertyId) return JSON.stringify({ error: 'Falta property_id.' });
+
+  const result = await findComparables({
+    property_id: propertyId,
+    limit: input.limit as number | undefined,
+  });
+  return JSON.stringify(result, null, 2);
+}
+
+function runSimulateCredit(input: Record<string, unknown>): string {
+  const priceCop = input.price_cop as number | undefined;
+  if (!priceCop || priceCop <= 0) {
+    return JSON.stringify({ error: 'Falta price_cop o es inválido.' });
+  }
+
+  const result = simulateCredit({
+    price_cop: priceCop,
+    down_payment_cop: input.down_payment_cop as number | undefined,
+    years: input.years as number | undefined,
+  });
+  return JSON.stringify(result, null, 2);
 }
 
 function runScheduleVisit(input: Record<string, unknown>): string {

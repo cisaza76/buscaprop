@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 interface ChatWidgetProps {
@@ -78,9 +78,8 @@ export function ChatWidget({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
+  const sendMessage = async (text: string) => {
+    const trimmed = text.trim();
     if (!trimmed || isLoading) return;
 
     // Optimistic: agregar mensaje del usuario inmediatamente.
@@ -127,6 +126,18 @@ export function ChatWidget({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendMessage(input);
+  };
+
+  // El user clickeó un chip de opción. Sólo dispara si no hay un mensaje
+  // pendiente — nunca permitimos doble click acumulativo.
+  const handleChipClick = (label: string) => {
+    if (isLoading) return;
+    sendMessage(label);
   };
 
   const resetConversation = () => {
@@ -181,9 +192,17 @@ export function ChatWidget({
           </div>
         )}
 
-        {messages.map((m) => (
-          <Bubble key={m.id} message={m} />
-        ))}
+        {messages.map((m, idx) => {
+          // Sólo el último mensaje de la AI tiene chips clickeables.
+          const isLastAi = m.role === 'ai' && idx === messages.length - 1;
+          return (
+            <Bubble
+              key={m.id}
+              message={m}
+              onChipClick={isLastAi ? handleChipClick : undefined}
+            />
+          );
+        })}
 
         {isLoading && (
           <div className="flex justify-start">
@@ -241,8 +260,16 @@ export function ChatWidget({
   );
 }
 
-function Bubble({ message }: { message: UIMessage }) {
+function Bubble({
+  message,
+  onChipClick,
+}: {
+  message: UIMessage;
+  onChipClick?: (label: string) => void;
+}) {
   const isUser = message.role === 'user';
+  const parsed = isUser ? null : parseAssistantText(message.text);
+
   return (
     <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div
@@ -253,7 +280,29 @@ function Bubble({ message }: { message: UIMessage }) {
             : 'bg-white border border-gray-200 text-gray-900 rounded-tl-sm shadow-sm'
         )}
       >
-        <p>{message.text}</p>
+        {/* Texto. En user es plain; en assistant parseamos markdown links. */}
+        {isUser || !parsed ? (
+          <p>{message.text}</p>
+        ) : (
+          <>
+            <p>{renderInlineMarkdown(parsed.body)}</p>
+            {parsed.options.length > 0 && onChipClick && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {parsed.options.map((opt, i) => (
+                  <button
+                    key={`${opt.label}-${i}`}
+                    type="button"
+                    onClick={() => onChipClick(opt.label)}
+                    className="text-xs px-3 py-1.5 border border-teal-300 text-teal-700 hover:bg-teal-50 active:bg-teal-100 rounded-full transition-colors"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
         {message.toolsUsed && message.toolsUsed.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">
             {message.toolsUsed.map((tool, i) => (
@@ -270,6 +319,103 @@ function Bubble({ message }: { message: UIMessage }) {
       </div>
     </div>
   );
+}
+
+// ============================================================================
+// Parser de respuestas del assistant
+// ============================================================================
+//
+// Detecta dos cosas en el texto de la AI:
+//   1. Markdown links `[texto](url)` → renderizamos como <a> clickeable.
+//   2. Opciones numeradas al final del mensaje:
+//        ¿Garaje?
+//        1. Sí
+//        2. No me importa
+//      → extraemos como chips clickeables. Las quitamos del cuerpo para no
+//      mostrarlas dos veces (texto + botones).
+
+interface ParsedAssistant {
+  body: string;
+  options: Array<{ label: string; index: number }>;
+}
+
+function parseAssistantText(text: string): ParsedAssistant {
+  // Buscamos un bloque de líneas consecutivas tipo "1. xxx", "2. xxx", "3. xxx"
+  // al final del mensaje. Tolera espacios en blanco antes.
+  const lines = text.split('\n');
+  const options: Array<{ label: string; index: number }> = [];
+  let cutAt = lines.length;
+
+  // Recorrer desde el final hacia atrás capturando opciones numeradas válidas.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = lines[i].trim();
+    if (ln === '') {
+      // Líneas vacías son tolerables al final pero no dentro del bloque.
+      if (options.length === 0) {
+        cutAt = i;
+        continue;
+      }
+      break;
+    }
+    const m = /^(\d+)[.)]\s+(.+)$/.exec(ln);
+    if (!m) break;
+    const idx = Number(m[1]);
+    options.unshift({ label: m[2].trim(), index: idx });
+    cutAt = i;
+  }
+
+  // Sanity: necesitamos al menos 2 opciones numeradas consecutivas para considerarlas chips.
+  // (Una sola "1." puede ser una lista normal del LLM.)
+  if (options.length < 2) {
+    return { body: text, options: [] };
+  }
+
+  // Verificar que los índices sean consecutivos empezando desde 1.
+  for (let k = 0; k < options.length; k++) {
+    if (options[k].index !== k + 1) {
+      return { body: text, options: [] };
+    }
+  }
+
+  const body = lines.slice(0, cutAt).join('\n').trimEnd();
+  return { body, options };
+}
+
+/**
+ * Renderiza inline markdown muy reducido — sólo links `[txt](url)` y **bold**.
+ * No usamos react-markdown para no agregar dependencia.
+ */
+function renderInlineMarkdown(text: string): ReactNode {
+  // Regex captura: bold **xxx** o link [txt](url).
+  // Procesamos secuencialmente. ATENCIÓN: esto NO es un parser markdown completo.
+  const re = /(\*\*([^*]+)\*\*)|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const out: ReactNode[] = [];
+  let lastIdx = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > lastIdx) out.push(text.slice(lastIdx, m.index));
+    if (m[1]) {
+      // **bold**
+      out.push(<strong key={key++}>{m[2]}</strong>);
+    } else if (m[3] && m[4]) {
+      // [text](url)
+      out.push(
+        <a
+          key={key++}
+          href={m[4]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-teal-700 underline hover:text-teal-900"
+        >
+          {m[3]}
+        </a>
+      );
+    }
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) out.push(text.slice(lastIdx));
+  return out;
 }
 
 function ScoreBadge({ score, status }: { score: number; status: string }) {

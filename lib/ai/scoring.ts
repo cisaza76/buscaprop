@@ -19,6 +19,13 @@ export interface ScoreSignals {
   visitScheduled: boolean;
   /** ¿El user mencionó una propiedad específica por nombre/barrio? */
   mentionedProperty: boolean;
+  /**
+   * ¿requestContact se llamó (vía tool) o user_phone está set en la conversación?
+   * Es señal fuerte de cierre — salta a CLOSING.
+   */
+  contactProvided?: boolean;
+  /** Cantidad de keys distintas en preferences (ciudad, presupuesto, etc.). */
+  preferenceCriteriaCount?: number;
 }
 
 export interface ScoreBreakdown {
@@ -53,13 +60,27 @@ export function calculateLeadScore(signals: ScoreSignals): ScoreBreakdown {
     reasons.push({ points: 25, reason: 'Mencionó querer visitar' });
   }
 
-  // Fuerte: dio contacto
-  if (/\b(\+?57\s?)?3\d{9}\b/.test(signals.userTextCombined)) {
-    // Número celular Colombia (3XXXXXXXXX, opcional +57)
-    reasons.push({ points: 25, reason: 'Compartió teléfono' });
+  // Fuerte: dio contacto. La señal preferida es la tool requestContact (que valida
+  // formato y normaliza). El regex queda como fallback para cuando el user pega
+  // un número en chat sin que la AI llame la tool.
+  // 50 puntos es deliberado: un user que ya dio teléfono después de mostrar
+  // opciones es lead, no importa qué tan corto fue el resto de la conversación.
+  // Combinado con +15 por ≥3 mensajes y +5 por search → cruza el threshold de 70.
+  if (signals.contactProvided) {
+    reasons.push({ points: 50, reason: 'Compartió teléfono (vía requestContact)' });
+  } else if (/\b(\+?57\s?)?3\d{9}\b/.test(signals.userTextCombined)) {
+    reasons.push({ points: 30, reason: 'Compartió teléfono (texto libre)' });
   }
   if (/\S+@\S+\.\S+/.test(signals.userTextCombined)) {
     reasons.push({ points: 15, reason: 'Compartió email' });
+  }
+
+  // Cualificación implícita: cuántos criterios de búsqueda confirmados.
+  const prefCount = signals.preferenceCriteriaCount ?? 0;
+  if (prefCount >= 3) {
+    reasons.push({ points: 10, reason: '3+ criterios de búsqueda confirmados' });
+  } else if (prefCount >= 1) {
+    reasons.push({ points: 5, reason: '1-2 criterios de búsqueda confirmados' });
   }
 
   // Medio: preguntas serias
