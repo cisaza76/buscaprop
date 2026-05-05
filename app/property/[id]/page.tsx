@@ -13,6 +13,7 @@ import { WhatsAppButton } from '@/components/dashboard/WhatsAppButton';
 import { PriceHistoryCard } from '@/components/dashboard/PriceHistoryCard';
 import { PhotoAnalysisCard } from '@/components/dashboard/PhotoAnalysisCard';
 import { CadastreCard } from '@/components/dashboard/CadastreCard';
+import { CertificateCard } from '@/components/dashboard/CertificateCard';
 import { fetchPropertyById, type Property } from '@/lib/supabase';
 import {
   formatCOP,
@@ -176,6 +177,11 @@ export default function PropertyDetailPage({ params }: PageProps) {
                 enriquecida y status='verified'. Renderiza null silenciosamente
                 si no hay data. */}
             <CadastreCard propertyId={property.id} />
+
+            {/* Certificado de Tradición. Si no hay subido, muestra widget de
+                upload (drag-drop). Si sí, muestra resumen + anotaciones +
+                bandera de gravámenes vigentes. */}
+            <CertificateCard propertyId={property.id} />
 
             {/* Description */}
             {property.description && (

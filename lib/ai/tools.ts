@@ -29,6 +29,10 @@ import {
 import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
 import { getCadastralForProperty } from '@/lib/cadastre/repository';
 import { soilClassificationLabel } from '@/lib/cadastre/ideca';
+import {
+  getLatestCertificate,
+  getCertificateAnotaciones,
+} from '@/lib/certificates/repository';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tool schemas — enviadas al modelo en cada request. Cacheadas en el prefix.
@@ -327,6 +331,33 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'getCertificateInfo',
+    description:
+      'Devuelve los datos del Certificado de Tradición y Libertad subido por el agente ' +
+      'para una propiedad (si existe). Incluye: matrícula, NUPRE, propietario actual ' +
+      '(según última anotación de compraventa), valor de última compraventa, total de ' +
+      'anotaciones, gravámenes/embargos vigentes (con resumen), estado folio (activo/cerrado), ' +
+      'fecha de impresión + fecha de expiración (30 días), y status de validación contra SNR. ' +
+      'Estados SNR posibles: "valid" (validado), "received" (SNR procesó pero sin afirmación ' +
+      'fuerte), "expired" (>30 días desde impresión), "invalid" (SNR rechazó), "pending" o ' +
+      '"error" (no se pudo validar). ' +
+      'IMPORTANTE: si has_active_liens=true, el comprador DEBE saber — mencionalo claramente ' +
+      'con el active_liens_summary. Si snr_status no es "valid", aclará que la validación ' +
+      'contra SNR no se pudo completar y recomendá verificar manualmente en ' +
+      'supernotariado.gov.co. Si no hay certificado subido, decí que el agente puede ' +
+      'subirlo desde el detalle de la propiedad.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        property_id: {
+          type: 'string',
+          description: 'UUID de la propiedad. Obligatorio.',
+        },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
     name: 'simulateCredit',
     description:
       'Calcula la cuota mensual estimada de un crédito hipotecario con tasa promedio del mercado ' +
@@ -434,6 +465,8 @@ export async function executeTool(
         return { result: await runAnalyzePhotos(input), isError: false };
       case 'getCadastreInfo':
         return { result: await runGetCadastreInfo(input), isError: false };
+      case 'getCertificateInfo':
+        return { result: await runGetCertificateInfo(input), isError: false };
       default:
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
@@ -644,6 +677,58 @@ async function runGetPriceHistory(input: Record<string, unknown>): Promise<strin
   const { snapshots: _omit, ...rest } = result;
   void _omit;
   return JSON.stringify(rest, null, 2);
+}
+
+async function runGetCertificateInfo(input: Record<string, unknown>): Promise<string> {
+  const propertyId = input.property_id as string | undefined;
+  if (!propertyId) return JSON.stringify({ error: 'Falta property_id.' });
+
+  const cert = await getLatestCertificate(propertyId);
+  if (!cert) {
+    return JSON.stringify({
+      uploaded: false,
+      message: 'No hay certificado de tradición subido para esta propiedad.',
+    });
+  }
+
+  // Anotaciones recientes (top 5 NO canceladas, ordenadas por fecha desc).
+  const anotaciones = await getCertificateAnotaciones(cert.id);
+  const recent = anotaciones
+    .filter((a) => !a.is_cancelled)
+    .sort((a, b) => (b.fecha ?? '').localeCompare(a.fecha ?? ''))
+    .slice(0, 5)
+    .map((a) => ({
+      numero: a.numero,
+      fecha: a.fecha,
+      categoria: a.categoria,
+      especificacion: a.especificacion,
+      valor_acto_cop: a.valor_acto_cop,
+    }));
+
+  return JSON.stringify(
+    {
+      uploaded: true,
+      matricula: cert.matricula,
+      nupre: cert.nupre,
+      codigo_catastral: cert.codigo_catastral,
+      estado_folio: cert.estado_folio,
+      total_anotaciones: cert.total_anotaciones,
+      certificate_issued_at: cert.certificate_issued_at,
+      certificate_expires_at: cert.certificate_expires_at,
+      current_owner: cert.current_owner,
+      current_owner_id: cert.current_owner_id,
+      last_sale_date: cert.last_sale_date,
+      last_sale_value_cop: cert.last_sale_value_cop,
+      has_active_liens: cert.has_active_liens,
+      active_liens_count: cert.active_liens_count,
+      active_liens_summary: cert.active_liens_summary,
+      snr_status: cert.snr_status,
+      snr_validated_at: cert.snr_validated_at,
+      recent_active_anotaciones: recent,
+    },
+    null,
+    2
+  );
 }
 
 async function runGetCadastreInfo(input: Record<string, unknown>): Promise<string> {
