@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/shared/Navbar';
 import { WhatsAppButton } from '@/components/dashboard/WhatsAppButton';
 import { PriceHistoryCard } from '@/components/dashboard/PriceHistoryCard';
+import { PhotoAnalysisCard } from '@/components/dashboard/PhotoAnalysisCard';
 import { fetchPropertyById, type Property } from '@/lib/supabase';
 import {
   formatCOP,
@@ -165,6 +166,10 @@ export default function PropertyDetailPage({ params }: PageProps) {
             {/* Histórico de precio. Si no hay snapshots, este componente
                 renderiza null silenciosamente — no rompe el layout. */}
             <PriceHistoryCard propertyId={property.id} />
+
+            {/* Análisis visual de fotos (Claude Vision, lazy con cache). Si
+                no hay fotos o falla, también renderiza null silenciosamente. */}
+            <PhotoAnalysisCard propertyId={property.id} />
 
             {/* Description */}
             {property.description && (

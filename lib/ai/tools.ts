@@ -26,6 +26,7 @@ import {
   simulateCredit,
   getPriceHistory,
 } from '@/lib/ai/analytics';
+import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tool schemas — enviadas al modelo en cada request. Cacheadas en el prefix.
@@ -271,6 +272,30 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'analyzePhotos',
+    description:
+      'Analiza las fotos de una propiedad (vía Claude Vision) y devuelve descriptores ' +
+      'visuales objetivos: nivel de luz, estilo de acabados, mobiliario aparente, tipo de ' +
+      'cocina, tipo de piso, vista, features visibles. Útil cuando el user pregunta cómo ' +
+      'se ve la propiedad o cuando querés agregar contexto visual a una recomendación. ' +
+      'IMPORTANTE: el resultado solo describe lo VISIBLE en las fotos — NO afirma antigüedad ' +
+      'de renovaciones, NO detecta humedad/grietas/instalaciones, NO estima costos. ' +
+      'Cuando la AI use el resultado: parafraseá los descriptores con prudencia ("se ve" / ' +
+      '"aparenta") y NUNCA agregues afirmaciones que el resultado no contiene. ' +
+      'Si appearance_overall es "needs_work" mencionalo como "algunas zonas con desgaste ' +
+      'visible — vale la pena verificar en visita".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        property_id: {
+          type: 'string',
+          description: 'UUID de la propiedad. Obligatorio.',
+        },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
     name: 'simulateCredit',
     description:
       'Calcula la cuota mensual estimada de un crédito hipotecario con tasa promedio del mercado ' +
@@ -374,6 +399,8 @@ export async function executeTool(
         return { result: runSimulateCredit(input), isError: false };
       case 'getPriceHistory':
         return { result: await runGetPriceHistory(input), isError: false };
+      case 'analyzePhotos':
+        return { result: await runAnalyzePhotos(input), isError: false };
       default:
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
@@ -584,6 +611,25 @@ async function runGetPriceHistory(input: Record<string, unknown>): Promise<strin
   const { snapshots: _omit, ...rest } = result;
   void _omit;
   return JSON.stringify(rest, null, 2);
+}
+
+async function runAnalyzePhotos(input: Record<string, unknown>): Promise<string> {
+  const propertyId = input.property_id as string | undefined;
+  if (!propertyId) return JSON.stringify({ error: 'Falta property_id.' });
+
+  const result = await analyzePropertyPhotos(propertyId);
+  // No mandamos el array completo de photos individuales al modelo (token-heavy).
+  // El agregado tiene la señal accionable para responder al user.
+  return JSON.stringify(
+    {
+      property_id: result.property_id,
+      photos_analyzed: result.aggregate?.photos_analyzed ?? 0,
+      aggregate: result.aggregate,
+      warning: result.warning,
+    },
+    null,
+    2
+  );
 }
 
 function runSimulateCredit(input: Record<string, unknown>): string {
