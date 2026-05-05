@@ -12,6 +12,7 @@ import { Navbar } from '@/components/shared/Navbar';
 import { WhatsAppButton } from '@/components/dashboard/WhatsAppButton';
 import { PriceHistoryCard } from '@/components/dashboard/PriceHistoryCard';
 import { PhotoAnalysisCard } from '@/components/dashboard/PhotoAnalysisCard';
+import { CadastreCard } from '@/components/dashboard/CadastreCard';
 import { fetchPropertyById, type Property } from '@/lib/supabase';
 import {
   formatCOP,
@@ -170,6 +171,11 @@ export default function PropertyDetailPage({ params }: PageProps) {
             {/* Análisis visual de fotos (Claude Vision, lazy con cache). Si
                 no hay fotos o falla, también renderiza null silenciosamente. */}
             <PhotoAnalysisCard propertyId={property.id} />
+
+            {/* Datos catastrales IDECA. Solo se muestra si la propiedad fue
+                enriquecida y status='verified'. Renderiza null silenciosamente
+                si no hay data. */}
+            <CadastreCard propertyId={property.id} />
 
             {/* Description */}
             {property.description && (

@@ -27,6 +27,8 @@ import {
   getPriceHistory,
 } from '@/lib/ai/analytics';
 import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
+import { getCadastralForProperty } from '@/lib/cadastre/repository';
+import { soilClassificationLabel } from '@/lib/cadastre/ideca';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Tool schemas — enviadas al modelo en cada request. Cacheadas en el prefix.
@@ -296,6 +298,35 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'getCadastreInfo',
+    description:
+      'Devuelve los datos catastrales reales de una propiedad de Bogotá, ' +
+      'cruzados contra IDECA (Catastro Distrital). Incluye: lot_code (identificador único ' +
+      'del lote en catastro), sector_name (barrio catastral oficial, ej "SANTA BARBARA ' +
+      'OCCIDENTAL"), lot_area_m2 (área del lote en m²), predio_units (cuántas unidades ' +
+      'prediales en el lote — útil para detectar edificios multifamiliares), y soil ' +
+      'classification (urbano/rural/expansión). ' +
+      'Útil para: (a) confirmar al user que el predio existe en registros oficiales; ' +
+      '(b) si predio_units > 1, mencionar que es un edificio (multifamiliar); ' +
+      '(c) si lot_area_m2 difiere mucho del area_m2 del listing, es porque el listing es ' +
+      'un apto dentro de un lote más grande — eso es normal. ' +
+      'IMPORTANTE: status puede ser "verified" (data buena), "not_found" (la propiedad no ' +
+      'cayó en catastro de Bogotá — puede ser rural o fuera de la ciudad), o "error" (falló ' +
+      'la consulta). Si no es verified, NO inventes nada — solo decí que no se pudo verificar. ' +
+      'NO afirmes propiedad legal, gravámenes, ni paz y salvo predial — IDECA solo da datos ' +
+      'físicos y de planeamiento, NO legales.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        property_id: {
+          type: 'string',
+          description: 'UUID de la propiedad. Obligatorio.',
+        },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
     name: 'simulateCredit',
     description:
       'Calcula la cuota mensual estimada de un crédito hipotecario con tasa promedio del mercado ' +
@@ -401,6 +432,8 @@ export async function executeTool(
         return { result: await runGetPriceHistory(input), isError: false };
       case 'analyzePhotos':
         return { result: await runAnalyzePhotos(input), isError: false };
+      case 'getCadastreInfo':
+        return { result: await runGetCadastreInfo(input), isError: false };
       default:
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
@@ -611,6 +644,37 @@ async function runGetPriceHistory(input: Record<string, unknown>): Promise<strin
   const { snapshots: _omit, ...rest } = result;
   void _omit;
   return JSON.stringify(rest, null, 2);
+}
+
+async function runGetCadastreInfo(input: Record<string, unknown>): Promise<string> {
+  const propertyId = input.property_id as string | undefined;
+  if (!propertyId) return JSON.stringify({ error: 'Falta property_id.' });
+
+  const data = await getCadastralForProperty(propertyId);
+  if (!data) {
+    return JSON.stringify({
+      enriched: false,
+      message: 'Esta propiedad todavía no fue enriquecida con datos catastrales.',
+    });
+  }
+  return JSON.stringify(
+    {
+      enriched: true,
+      status: data.status,
+      lot_code: data.lot_code,
+      manzana_code: data.manzana_code,
+      sector_code: data.sector_code,
+      sector_name: data.sector_name,
+      predio_units: data.predio_units,
+      lot_area_m2: data.lot_area_m2,
+      soil_classification: data.soil_classification,
+      soil_classification_label: soilClassificationLabel(data.soil_classification),
+      validated_at: data.validated_at,
+      error_message: data.error_message,
+    },
+    null,
+    2
+  );
 }
 
 async function runAnalyzePhotos(input: Record<string, unknown>): Promise<string> {
