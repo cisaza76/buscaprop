@@ -277,6 +277,171 @@ export async function findComparables(
 }
 
 // ============================================================================
+// getPriceHistory
+// ============================================================================
+
+export interface PriceHistorySnapshot {
+  scraped_at: string;
+  price_cop: number;
+  status: 'active' | 'delisted' | 'relisted';
+  delta_cop: number | null;
+  delta_pct: number | null;
+  source_portal: string;
+}
+
+export interface PriceDrop {
+  from_price_cop: number;
+  to_price_cop: number;
+  delta_cop: number;
+  delta_pct: number;
+  dropped_at: string;
+}
+
+export interface PriceHistoryResult {
+  property_id: string;
+  /** First time we ever saw this listing. Null si no hay snapshots. */
+  first_seen_at: string | null;
+  /** Última actualización. */
+  last_seen_at: string | null;
+  /** Días desde el primer snapshot hasta hoy o hasta el delisting. */
+  days_on_market: number | null;
+  /** Si la propiedad fue delisted, este es el timestamp; si no, null. */
+  delisted_at: string | null;
+  /** Precio inicial (primer snapshot). */
+  initial_price_cop: number | null;
+  /** Precio último (último snapshot). */
+  current_price_cop: number | null;
+  /** Cambio absoluto desde el primer snapshot al último. */
+  total_delta_cop: number | null;
+  total_delta_pct: number | null;
+  /** Cantidad de cambios de precio (snapshots con delta ≠ 0). */
+  price_changes_count: number;
+  /** Bajadas de precio (delta < 0), con magnitudes. */
+  price_drops: PriceDrop[];
+  /** Subidas de precio (delta > 0). */
+  price_increases: PriceDrop[];
+  /** Snapshots crudos limitados al rango pedido, en orden ascendente. */
+  snapshots: PriceHistorySnapshot[];
+  warning?: string;
+}
+
+export interface GetPriceHistoryInput {
+  property_id: string;
+  /** Cuántos días hacia atrás. Default 90. */
+  days?: number;
+}
+
+export async function getPriceHistory(
+  input: GetPriceHistoryInput
+): Promise<PriceHistoryResult> {
+  const sb = getClient();
+  const days = Math.max(1, Math.min(365, input.days ?? 90));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  // Cargar snapshots del rango pedido + 1 anterior (para tener delta del primero).
+  const { data: rows, error } = await sb
+    .from('property_history')
+    .select('scraped_at, price_cop, status, delta_cop, delta_pct, source_portal')
+    .eq('property_id', input.property_id)
+    .gte('scraped_at', since)
+    .order('scraped_at', { ascending: true });
+
+  if (error) {
+    // Si la tabla no existe (migration 008 sin aplicar), devolvemos warning.
+    const msg = error.message ?? '';
+    if (/does not exist/i.test(msg) || /could not find.*table/i.test(msg)) {
+      return emptyHistory(input.property_id, 'Migration 008 no aplicada — historial no disponible.');
+    }
+    throw new Error(`getPriceHistory failed: ${error.message}`);
+  }
+
+  const snapshots = (rows ?? []) as PriceHistorySnapshot[];
+  if (snapshots.length === 0) {
+    return emptyHistory(
+      input.property_id,
+      `Sin snapshots en los últimos ${days} días. ` +
+        `La propiedad puede ser muy reciente o el scraper no la ha re-visitado.`
+    );
+  }
+
+  const first = snapshots[0];
+  const last = snapshots[snapshots.length - 1];
+  const initialPrice = first.price_cop;
+  const currentPrice = last.price_cop;
+
+  // Si el último estado es delisted, marcamos delisted_at.
+  const delistedAt = last.status === 'delisted' ? last.scraped_at : null;
+
+  // days_on_market: desde first_seen hasta delisted (si aplica) o hasta hoy.
+  const startMs = new Date(first.scraped_at).getTime();
+  const endMs = delistedAt ? new Date(delistedAt).getTime() : Date.now();
+  const daysOnMarket = Math.max(0, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)));
+
+  const totalDeltaCop = currentPrice - initialPrice;
+  const totalDeltaPct =
+    initialPrice > 0 ? Math.round((totalDeltaCop / initialPrice) * 10000) / 100 : null;
+
+  // Iterar snapshots para extraer drops e increases (excluyendo el primero,
+  // que no tiene delta en este rango).
+  const drops: PriceDrop[] = [];
+  const increases: PriceDrop[] = [];
+  let priceChangesCount = 0;
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1];
+    const cur = snapshots[i];
+    if (cur.price_cop === prev.price_cop) continue;
+    priceChangesCount++;
+    const change: PriceDrop = {
+      from_price_cop: prev.price_cop,
+      to_price_cop: cur.price_cop,
+      delta_cop: cur.price_cop - prev.price_cop,
+      delta_pct:
+        prev.price_cop > 0
+          ? Math.round(((cur.price_cop - prev.price_cop) / prev.price_cop) * 10000) / 100
+          : 0,
+      dropped_at: cur.scraped_at,
+    };
+    if (change.delta_cop < 0) drops.push(change);
+    else increases.push(change);
+  }
+
+  return {
+    property_id: input.property_id,
+    first_seen_at: first.scraped_at,
+    last_seen_at: last.scraped_at,
+    days_on_market: daysOnMarket,
+    delisted_at: delistedAt,
+    initial_price_cop: initialPrice,
+    current_price_cop: currentPrice,
+    total_delta_cop: totalDeltaCop,
+    total_delta_pct: totalDeltaPct,
+    price_changes_count: priceChangesCount,
+    price_drops: drops,
+    price_increases: increases,
+    snapshots,
+  };
+}
+
+function emptyHistory(propertyId: string, warning: string): PriceHistoryResult {
+  return {
+    property_id: propertyId,
+    first_seen_at: null,
+    last_seen_at: null,
+    days_on_market: null,
+    delisted_at: null,
+    initial_price_cop: null,
+    current_price_cop: null,
+    total_delta_cop: null,
+    total_delta_pct: null,
+    price_changes_count: 0,
+    price_drops: [],
+    price_increases: [],
+    snapshots: [],
+    warning,
+  };
+}
+
+// ============================================================================
 // simulateCredit
 // ============================================================================
 

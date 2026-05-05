@@ -8,6 +8,7 @@ import { scrapeFincaraiz, type FincaraizOptions } from './fincaraiz';
 import { scrapeMetroCuadrado, type MetroCuadradoOptions } from './metrocuadrado';
 import { scrapeProperati, type ProperatiOptions } from './properati';
 import { scrapeCiencuadras, type CiencuadrasOptions } from './ciencuadras';
+import { markDelistedForPortal } from './shared/upsert';
 import type { ScrapeResult, SourcePortal } from './shared/types';
 
 export interface RunnerOptions {
@@ -42,6 +43,24 @@ export async function runAllScrapers(opts: RunnerOptions = {}): Promise<{
     try {
       const r = await runOne(portal, opts);
       results.push(r);
+      // Sweep post-scrape: marcar como 'delisted' lo que llevaba >7 días sin
+      // verse en este portal. Best-effort — si falla, lo logueamos pero no
+      // rompemos el run completo.
+      try {
+        const sweep = await markDelistedForPortal(portal);
+        if (sweep.markedDelisted > 0) {
+          console.log(
+            `[${portal}] sweep: ${sweep.markedDelisted} marcadas como delisted ` +
+              `(${sweep.alreadyDelisted} ya estaban)`
+          );
+        }
+      } catch (sweepErr) {
+        console.warn(
+          `[${portal}] sweep falló: ${
+            sweepErr instanceof Error ? sweepErr.message : String(sweepErr)
+          }`
+        );
+      }
     } catch (err) {
       results.push({
         portal,

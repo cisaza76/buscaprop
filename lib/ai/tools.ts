@@ -24,6 +24,7 @@ import {
   analyzeNeighborhood,
   findComparables,
   simulateCredit,
+  getPriceHistory,
 } from '@/lib/ai/analytics';
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -246,6 +247,30 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'getPriceHistory',
+    description:
+      'Devuelve el histórico real de precio de una propiedad: cuándo apareció, ' +
+      'cuántos días lleva publicada, si bajó/subió de precio (con magnitudes), y si fue ' +
+      'retirada (delisted). Solo afirma lo que está en la respuesta — si \`price_changes_count\` ' +
+      'es 0, NO digas "el precio se mantuvo estable" como si fuera análisis; decí "no hubo ' +
+      'cambios registrados en X días". Si days_on_market es alto (>60 días) puede ser señal ' +
+      'de precio inflado. Si hay drops, mencionalos al user — es info accionable.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        property_id: {
+          type: 'string',
+          description: 'UUID de la propiedad. Obligatorio.',
+        },
+        days: {
+          type: 'number',
+          description: 'Ventana en días (7, 30, 60, 90, 180, 365). Default 90.',
+        },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
     name: 'simulateCredit',
     description:
       'Calcula la cuota mensual estimada de un crédito hipotecario con tasa promedio del mercado ' +
@@ -347,6 +372,8 @@ export async function executeTool(
         return { result: await runFindComparables(input), isError: false };
       case 'simulateCredit':
         return { result: runSimulateCredit(input), isError: false };
+      case 'getPriceHistory':
+        return { result: await runGetPriceHistory(input), isError: false };
       default:
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
@@ -541,6 +568,22 @@ async function runFindComparables(input: Record<string, unknown>): Promise<strin
     limit: input.limit as number | undefined,
   });
   return JSON.stringify(result, null, 2);
+}
+
+async function runGetPriceHistory(input: Record<string, unknown>): Promise<string> {
+  const propertyId = input.property_id as string | undefined;
+  if (!propertyId) return JSON.stringify({ error: 'Falta property_id.' });
+
+  const result = await getPriceHistory({
+    property_id: propertyId,
+    days: input.days as number | undefined,
+  });
+
+  // No mandamos los snapshots crudos al modelo — son ruido y consumen tokens.
+  // Sí mandamos los agregados + drops/increases (que son la señal accionable).
+  const { snapshots: _omit, ...rest } = result;
+  void _omit;
+  return JSON.stringify(rest, null, 2);
 }
 
 function runSimulateCredit(input: Record<string, unknown>): string {

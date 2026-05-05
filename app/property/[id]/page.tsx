@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/shared/Navbar';
 import { WhatsAppButton } from '@/components/dashboard/WhatsAppButton';
+import { PriceHistoryCard } from '@/components/dashboard/PriceHistoryCard';
 import { fetchPropertyById, type Property } from '@/lib/supabase';
 import {
   formatCOP,
@@ -160,6 +161,10 @@ export default function PropertyDetailPage({ params }: PageProps) {
                 <SpecBox label="Tipo" value={propertyTypeLabel(property.property_type)} />
               </dl>
             </section>
+
+            {/* Histórico de precio. Si no hay snapshots, este componente
+                renderiza null silenciosamente — no rompe el layout. */}
+            <PriceHistoryCard propertyId={property.id} />
 
             {/* Description */}
             {property.description && (
