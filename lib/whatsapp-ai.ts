@@ -85,6 +85,9 @@ export async function generateAIResponse(
   let finalText = '';
   let truncated = true;
 
+  // Validar invariante del history rehidratado antes del primer call.
+  validateMessages(messages);
+
   for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
     const response = await client.messages.create({
       model: MODEL,
@@ -160,11 +163,17 @@ export async function generateAIResponse(
       usage: response.usage,
     });
 
-    // Append assistant turn al messages array (con TODOS los blocks intactos
-    // — tool_use blocks deben ir verbatim al siguiente call).
-    messages.push({ role: 'assistant', content: response.content });
+    // Append assistant turn al messages array. CRÍTICO: filtrar response.content
+    // a sólo blocks echoables (text + tool_use). Otros tipos de output (thinking,
+    // server_tool_use, etc.) NO son válidos como ContentBlockParam y rompen el
+    // siguiente call con "tool_use ids were found without tool_result blocks".
+    const echoableContent = toEchoableContent(response.content);
+    messages.push({ role: 'assistant', content: echoableContent });
 
     // Ejecutar cada tool y armar el bloque de tool_result.
+    // INVARIANTE CRÍTICO: el user message con tool_results DEBE ir inmediatamente
+    // después del assistant message con tool_use. Cualquier message intermedio
+    // rompe el API.
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const block of toolUseBlocks) {
       toolsUsed.push(block.name);
@@ -186,8 +195,11 @@ export async function generateAIResponse(
       });
     }
 
-    // Append como user message con todos los tool_results.
+    // Append como user message con todos los tool_results — uno por cada tool_use.
     messages.push({ role: 'user', content: toolResults });
+
+    // Validar invariante antes de la próxima iteración.
+    validateMessages(messages);
   }
 
   // 5. Recalcular score con todas las señales acumuladas.
@@ -243,9 +255,81 @@ export async function generateAIResponse(
 // ============================================================================
 
 /**
+ * Filtra response.content (Anthropic.ContentBlock[]) → ContentBlockParam[]
+ * dejando sólo los tipos válidos para echoear de vuelta al API en el siguiente
+ * turno. Los blocks output-only (thinking, etc.) tienen que descartarse o el
+ * API rechaza con 400.
+ */
+function toEchoableContent(
+  blocks: Anthropic.ContentBlock[]
+): Anthropic.ContentBlockParam[] {
+  const out: Anthropic.ContentBlockParam[] = [];
+  for (const b of blocks) {
+    if (b.type === 'text') {
+      out.push({ type: 'text', text: b.text });
+    } else if (b.type === 'tool_use') {
+      out.push({
+        type: 'tool_use',
+        id: b.id,
+        name: b.name,
+        input: b.input as Record<string, unknown>,
+      });
+    }
+    // Cualquier otro tipo (thinking, server_tool_use, etc.) se descarta.
+  }
+  return out;
+}
+
+/**
+ * Verifica el invariante crítico del tool-use loop:
+ *   - Para todo tool_use block en un assistant message, debe existir un
+ *     tool_result block con el mismo tool_use_id en el SIGUIENTE user message.
+ *   - Para todo tool_result block, debe existir un tool_use anterior con id
+ *     coincidente.
+ *
+ * Si se rompe, lanzamos error temprano con un mensaje claro en lugar de
+ * dejar que el API devuelva el críptico "tool_use ids were found without
+ * tool_result blocks immediately after".
+ */
+function validateMessages(messages: Anthropic.MessageParam[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' || typeof msg.content === 'string') continue;
+
+    const toolUseIds = msg.content
+      .filter((b): b is Anthropic.ToolUseBlockParam => b.type === 'tool_use')
+      .map((b) => b.id);
+    if (toolUseIds.length === 0) continue;
+
+    const next = messages[i + 1];
+    if (!next || next.role !== 'user' || typeof next.content === 'string') {
+      throw new Error(
+        `[validateMessages] assistant[${i}] tiene tool_use ids ${JSON.stringify(toolUseIds)} ` +
+          `pero el siguiente message no es un user message con tool_results.`
+      );
+    }
+    const resultIds = next.content
+      .filter((b): b is Anthropic.ToolResultBlockParam => b.type === 'tool_result')
+      .map((b) => b.tool_use_id);
+    const missing = toolUseIds.filter((id) => !resultIds.includes(id));
+    if (missing.length > 0) {
+      throw new Error(
+        `[validateMessages] tool_use ids ${JSON.stringify(missing)} sin tool_result correspondiente ` +
+          `en messages[${i + 1}]. resultIds=${JSON.stringify(resultIds)}`
+      );
+    }
+  }
+}
+
+/**
  * Convierte el history persistido a formato Anthropic. Compacta los runs de
  * messages role='tool' contiguos en un solo user message con array de
  * tool_result blocks (que es como el API lo espera entre turns).
+ *
+ * IMPORTANTE: si un assistant message tiene tool_use blocks pero no le sigue
+ * ningún tool_result en DB (por una iteración previa que falló), descartamos
+ * los tool_use blocks de ese assistant — sólo conservamos el texto. Esto evita
+ * mandar al API un par roto que disparó el fix original.
  */
 function historyToMessages(history: ConversationMessage[]): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = [];
@@ -265,8 +349,31 @@ function historyToMessages(history: ConversationMessage[]): Anthropic.MessagePar
       if (msg.content.trim()) {
         blocks.push({ type: 'text', text: msg.content });
       }
+
+      // Verificar si los tool_calls de este assistant tienen tool_result correspondiente
+      // en los siguientes messages role='tool'. Si no, descartar los tool_calls
+      // (mantenemos sólo el texto) — un tool_use huérfano rompe el siguiente API call.
       if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
+        const followingToolResultIds = new Set<string>();
+        let j = i + 1;
+        while (j < history.length && history[j].role === 'tool') {
+          const tr = history[j].tool_result;
+          if (tr) followingToolResultIds.add(tr.tool_use_id);
+          j++;
+        }
+
+        const validToolUses = msg.tool_calls.filter((tc) =>
+          followingToolResultIds.has(tc.id)
+        );
+        const orphanedCount = msg.tool_calls.length - validToolUses.length;
+        if (orphanedCount > 0) {
+          console.warn(
+            `[historyToMessages] descartando ${orphanedCount} tool_use huérfano(s) ` +
+              `del assistant message ${msg.id} (sin tool_result correspondiente en DB)`
+          );
+        }
+
+        for (const tc of validToolUses) {
           blocks.push({
             type: 'tool_use',
             id: tc.id,
@@ -275,20 +382,34 @@ function historyToMessages(history: ConversationMessage[]): Anthropic.MessagePar
           });
         }
       }
-      out.push({
-        role: 'assistant',
-        content: blocks.length > 0 ? blocks : msg.content,
-      });
+
+      // Si no quedó nada (texto vacío + tool_uses huérfanos), saltamos el message.
+      if (blocks.length === 0) {
+        i++;
+        continue;
+      }
+
+      out.push({ role: 'assistant', content: blocks });
       i++;
       continue;
     }
 
     if (msg.role === 'tool') {
       // Compactar runs contiguos de tool messages en un solo user message.
+      // Sólo incluir tool_results cuyo tool_use_id aparece en el assistant
+      // INMEDIATAMENTE anterior en `out` — descartar huérfanos.
+      const prevAssistant = out[out.length - 1];
+      const validToolUseIds = new Set<string>();
+      if (prevAssistant?.role === 'assistant' && Array.isArray(prevAssistant.content)) {
+        for (const b of prevAssistant.content) {
+          if (b.type === 'tool_use') validToolUseIds.add(b.id);
+        }
+      }
+
       const toolBlocks: Anthropic.ToolResultBlockParam[] = [];
       while (i < history.length && history[i].role === 'tool') {
         const t = history[i];
-        if (t.tool_result) {
+        if (t.tool_result && validToolUseIds.has(t.tool_result.tool_use_id)) {
           toolBlocks.push({
             type: 'tool_result',
             tool_use_id: t.tool_result.tool_use_id,
