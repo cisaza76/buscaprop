@@ -115,3 +115,29 @@ export function canonicalCity(raw: string | null | undefined): string | null {
     .trim();
   return CITY_CANONICAL[k] ?? raw.trim();
 }
+
+// ============================================================================
+// Validación geográfica
+// ============================================================================
+//
+// Bounding box aproximado de Colombia continental + insular. Lo usamos para
+// descartar coordenadas que salen "fuera de Colombia" — eso suele ser señal de
+// un parser cambiado del portal devolviendo placeholders raros (ej. (0, 0)),
+// orden lat/lng invertido, o un valor escapado mal.
+//
+// Fuente: extremos geográficos según IGAC.
+//   - Lat: 4°13'30"S (San Andrés más sur) a 12°27'N (Punta Gallinas)
+//   - Lng: 66°50'W (más este) a 81°43'W (San Andrés isla más oeste)
+// Damos un margen pequeño por las islas y errores de precisión.
+const CO_LAT_MIN = -4.5;
+const CO_LAT_MAX = 13;
+const CO_LNG_MIN = -82;
+const CO_LNG_MAX = -66;
+
+export function isValidColombiaCoord(lat: number, lng: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 || lng === 0) return false; // (0, 0) suele ser placeholder.
+  return (
+    lat >= CO_LAT_MIN && lat <= CO_LAT_MAX && lng >= CO_LNG_MIN && lng <= CO_LNG_MAX
+  );
+}

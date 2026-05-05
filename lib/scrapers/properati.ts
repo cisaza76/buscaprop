@@ -17,6 +17,7 @@ import { fetchText } from './shared/http';
 import { upsertBatch } from './shared/upsert';
 import {
   canonicalCity,
+  isValidColombiaCoord,
   mapPropertyType,
   normalizeWhitespace,
   parseCOP,
@@ -63,6 +64,13 @@ export interface ProperatiOptions {
   listingTypes?: Array<'venta' | 'arriendo'>;
   /** Páginas máximas por combo. Default 5 = 160 listings/combo. */
   maxPagesPerCombo?: number;
+  /**
+   * Si true, fetch detail page por cada listing para extraer coordinates
+   * (Properati no las expone en search). +1 request por listing (~500KB c/u),
+   * pero CRÍTICO para Phase 10 (IDECA enrichment).
+   * Default true. Pasar false en tests / debugging local.
+   */
+  enrichWithDetail?: boolean;
 }
 
 // ============================================================================
@@ -148,6 +156,23 @@ export async function scrapeProperati(
       }
       // Si no agregamos nada nuevo (todas duplicadas), abandonar este combo.
       if (addedThisPage === 0) break;
+    }
+  }
+
+  // Enriquecer con detail-fetch para extraer coords (no están en search).
+  // Default true desde Phase 10 — sin coords no podemos enriquecer con IDECA.
+  const shouldEnrich = opts.enrichWithDetail !== false;
+  if (shouldEnrich) {
+    for (const item of items) {
+      try {
+        await enrichWithDetail(item);
+      } catch (err) {
+        result.errors.push({
+          url: item.source_url,
+          stage: 'fetch',
+          message: `enrich: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     }
   }
 
@@ -310,4 +335,52 @@ function firstInt(s: string): number | null {
   if (!s) return null;
   const n = parseInteger(s);
   return n != null && n >= 0 ? n : null;
+}
+
+// ============================================================================
+// ENRICH WITH DETAIL — fetch /detalle/{id} para extraer coords
+// ============================================================================
+//
+// Properati no expone lat/lng en el search/listing page (cards). Sí están en
+// /detalle/{id} dentro de un script inline con un objeto JS literal:
+//
+//   adLocationData: {
+//     coordinates: {
+//       latitude: "4.699150899999999",
+//       longitude: "-74.0518031"
+//     },
+//     ...
+//   }
+//
+// Patrón validado en Phase 10 probe (2 URLs reales). Las coords vienen como
+// strings — hacemos parseFloat. Validamos contra bounding box de Colombia.
+
+const PROPERATI_COORDS_RE =
+  /latitude:\s*"([0-9.-]+)"\s*,\s*longitude:\s*"([0-9.-]+)"/;
+
+export function parseCoordsFromHtml(
+  html: string
+): { latitude: number; longitude: number } | null {
+  const m = html.match(PROPERATI_COORDS_RE);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (!isValidColombiaCoord(lat, lng)) return null;
+  return { latitude: lat, longitude: lng };
+}
+
+export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
+  // Solo necesitamos el HTML para regex de coords. No parseamos cheerio
+  // porque el script con coords NO es elemento DOM — es contenido de un
+  // <script> inline.
+  const html = await fetchText(item.source_url, { userAgent: PROPERATI_UA });
+  const coords = parseCoordsFromHtml(html);
+  if (coords) {
+    item.latitude = coords.latitude;
+    item.longitude = coords.longitude;
+  } else {
+    // No es un error duro — algunos listings pueden no tener mapa público.
+    // Logueamos solo si resulta útil para diagnóstico (modo verbose podría
+    // activarlo).
+  }
 }

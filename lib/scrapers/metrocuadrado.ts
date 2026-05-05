@@ -15,6 +15,7 @@ import { fetchText } from './shared/http';
 import { upsertBatch } from './shared/upsert';
 import {
   canonicalCity,
+  isValidColombiaCoord,
   mapPropertyType,
   normalizeWhitespace,
   parseInteger,
@@ -52,7 +53,10 @@ export interface MetroCuadradoOptions {
   listingTypes?: Array<'venta' | 'arriendo'>;
   /**
    * Si true, fetch detail page por cada listing para añadir
-   * coordinates + description + gallery completa. ~50× más lento.
+   * coordinates + description + gallery completa. ~10× más lento (1 request
+   * extra por listing) pero CRÍTICO: las coords solo aparecen en detail.
+   * Default true desde Phase 10 — sin coords no podemos enriquecer con IDECA.
+   * Pasar false explícitamente solo en tests / debugging local.
    */
   enrichWithDetail?: boolean;
 }
@@ -157,8 +161,11 @@ export async function scrapeMetroCuadrado(
     }
   }
 
-  // Enriquecer con detail-fetch si se pidió.
-  if (opts.enrichWithDetail) {
+  // Enriquecer con detail-fetch. Default true desde Phase 10 — sin esto
+  // las coords no se extraen y bloquea el pipeline de enrichment con IDECA.
+  // Solo se salta si explícitamente se pasó enrichWithDetail=false.
+  const shouldEnrich = opts.enrichWithDetail !== false;
+  if (shouldEnrich) {
     for (const item of items) {
       try {
         await enrichWithDetail(item);
@@ -479,9 +486,40 @@ export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
   const html = await fetchText(item.source_url, { userAgent: M2_UA });
   const chunks = extractRscChunks(html);
   const data = extractDetailData(chunks) as M2DetailData | null;
+
+  // Coords primero por la vía rápida (RSC parser) — fast path histórico.
+  let lat: number | null = null;
+  let lng: number | null = null;
+  if (data) {
+    if (typeof data.coordinates?.lat === 'number') lat = data.coordinates.lat;
+    if (typeof data.coordinates?.lon === 'number') lng = data.coordinates.lon;
+  }
+
+  // Fallback: regex directo sobre el HTML raw para casos donde el parser RSC
+  // no encontró el chunk (cambios menores en payload). Patrón validado en probe:
+  //   \"coordinates\":{\"lon\":-74.84,\"lat\":10.99}
+  if (lat === null || lng === null) {
+    const m = html.match(/\\"coordinates\\":\{\\"lon\\":(-?[0-9.]+),\\"lat\\":(-?[0-9.]+)\}/);
+    if (m) {
+      lng = parseFloat(m[1]); // ⚠️ ORDEN: lon es primer grupo, lat segundo
+      lat = parseFloat(m[2]);
+    }
+  }
+
+  // Validar contra bounding box de Colombia. Si no pasa, descartamos y
+  // logueamos — nunca persistimos coords inventadas / inválidas.
+  if (lat !== null && lng !== null) {
+    if (isValidColombiaCoord(lat, lng)) {
+      item.latitude = lat;
+      item.longitude = lng;
+    } else {
+      console.warn(
+        `[metrocuadrado] coords fuera de Colombia para ${item.source_url}: (${lat}, ${lng}) — descartadas`
+      );
+    }
+  }
+
   if (!data) return;
-  if (typeof data.coordinates?.lat === 'number') item.latitude = data.coordinates.lat;
-  if (typeof data.coordinates?.lon === 'number') item.longitude = data.coordinates.lon;
   if (data.comment) item.description = normalizeWhitespace(data.comment);
   if (Array.isArray(data.images) && data.images.length > 0) {
     const urls = data.images.map((img) => img?.image).filter((u): u is string => !!u);
