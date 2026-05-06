@@ -88,7 +88,9 @@ export async function scrapeCiencuadras(
     errors: [],
   };
 
-  const maxListings = opts.maxListings ?? 200;
+  // Default 1500: con sitemap discovery + detail fetch ~1s c/u, ~25 min
+  // de corrida completa. Vercel Pro (800s) lo soporta si corre solo.
+  const maxListings = opts.maxListings ?? 1500;
   const cities = opts.cities ?? DEFAULT_CITIES;
   const listingTypes = opts.listingTypes ?? DEFAULT_OPS!;
 

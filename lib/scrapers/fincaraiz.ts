@@ -101,7 +101,10 @@ export async function scrapeFincaraiz(
     errors: [],
   };
 
-  const maxListings = opts.maxListings ?? 100;
+  // Default 1500: con sitemap discovery completo + detail fetch ~1s c/u,
+  // un run completo tarda ~25 min. Cabe en Vercel Pro (800s) si corre solo
+  // este portal. El cron orquesta correr 1 portal por invocación.
+  const maxListings = opts.maxListings ?? 1500;
   const departments = opts.departments ?? DEFAULT_DEPARTMENTS;
   const propertyTypes = opts.propertyTypes ?? DEFAULT_TYPES!;
   const listingTypes = opts.listingTypes ?? DEFAULT_OPS!;
