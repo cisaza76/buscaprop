@@ -570,7 +570,10 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     max_bedrooms: input.max_bedrooms as number | undefined,
     min_price: input.min_price as number | undefined,
     max_price: input.max_price as number | undefined,
-    limit: 5,
+    // Limit: 20 da contexto suficiente al modelo para representar bien el inventario
+    // del barrio. Antes era 5 — perdía 75% del contexto cuando había 20 propiedades.
+    // El modelo decide cuáles 2-3 mostrar al cliente, pero ve el panorama completo.
+    limit: 20,
   });
 
   if (properties.length === 0) {

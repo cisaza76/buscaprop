@@ -44,13 +44,50 @@ const DEFAULT_TYPES: MetroCuadradoOptions['propertyTypes'] = [
 ];
 const DEFAULT_OPS: MetroCuadradoOptions['listingTypes'] = ['venta', 'arriendo'];
 
+/**
+ * Barrios premium por ciudad (slug M2). Cada combo {city, type, op, barrio}
+ * suma ~50 listings adicionales que NO se capturan con la búsqueda city-level.
+ * MetroCuadrado solo devuelve ~70 listings por página inicial — sin paginación
+ * real (vía API AWS) la única forma de capturar más es agregar combos por
+ * barrio.
+ *
+ * Con 12 barrios bogotanos × 4 tipos × 2 ops = 96 combos extra → ~5000 listings
+ * adicionales solo en Bogotá. Lista enfocada en barrios donde el mercado de
+ * BuscaProp tiene más demanda (premium + medio-alto).
+ */
+const DEFAULT_BARRIOS: Record<string, string[]> = {
+  bogota: [
+    'rosales',
+    'chapinero',
+    'usaquen',
+    'chico-norte',
+    'cabrera',
+    'nogal',
+    'santa-barbara',
+    'cedritos',
+    'santa-ana',
+    'quinta-camacho',
+    'salitre',
+    'modelia',
+  ],
+  medellin: ['poblado', 'laureles', 'envigado', 'sabaneta', 'belen'],
+  cali: ['ciudad-jardin', 'el-penon'],
+  cartagena: ['centro-historico', 'bocagrande', 'manga'],
+};
+
 export interface MetroCuadradoOptions {
-  /** Máximo de propiedades a insertar. Default 200. */
+  /** Máximo de propiedades a insertar. Default 5000. */
   maxListings?: number;
   /** Slugs de ciudades en el path M2 (sin tildes). */
   cities?: string[];
   propertyTypes?: Array<'apartamento' | 'casa' | 'oficina' | 'lote'>;
   listingTypes?: Array<'venta' | 'arriendo'>;
+  /**
+   * Si true (default), agrega combos por barrio premium para capturar más
+   * inventario (M2 no soporta paginación real desde el HTML; cada barrio es
+   * una página fresca). Pasar false solo para scraping rápido city-level.
+   */
+  scrapByBarrios?: boolean;
   /**
    * Si true, fetch detail page por cada listing para añadir
    * coordinates + description + gallery completa. ~10× más lento (1 request
@@ -83,17 +120,31 @@ export async function scrapeMetroCuadrado(
     errors: [],
   };
 
-  const maxListings = opts.maxListings ?? 200;
+  const maxListings = opts.maxListings ?? 5000;
   const cities = opts.cities ?? DEFAULT_CITIES;
   const propertyTypes = opts.propertyTypes ?? DEFAULT_TYPES!;
   const listingTypes = opts.listingTypes ?? DEFAULT_OPS!;
+  const scrapByBarrios = opts.scrapByBarrios !== false;
 
-  // City-first iteration para diversidad geográfica desde el primer combo.
-  const combos: Array<{ city: string; type: string; op: string }> = [];
+  // Combos: city-level primero (resultados generales) + barrio-level para
+  // ciudades con barrios listados en DEFAULT_BARRIOS. M2 no permite paginar
+  // realmente desde HTML — cada combo barrio es la única forma de capturar
+  // inventario adicional sin reverse-engineering la API AWS.
+  const combos: Array<{ city: string; type: string; op: string; barrio?: string }> = [];
   for (const op of listingTypes) {
     for (const type of propertyTypes) {
+      // City-level primero (resultados base, ~50-70 listings cada uno).
       for (const city of cities) {
         combos.push({ city, type, op });
+      }
+      // Barrio-level después (~50 listings extra por barrio).
+      if (scrapByBarrios) {
+        for (const city of cities) {
+          const barrios = DEFAULT_BARRIOS[city] ?? [];
+          for (const barrio of barrios) {
+            combos.push({ city, type, op, barrio });
+          }
+        }
       }
     }
   }
@@ -104,7 +155,10 @@ export async function scrapeMetroCuadrado(
   for (const combo of combos) {
     if (items.length >= maxListings) break;
 
-    const url = `${M2_BASE}/${combo.type}/${combo.op}/${combo.city}/`;
+    // URL con barrio si aplica: /apartamento/arriendo/bogota/rosales/
+    const url = combo.barrio
+      ? `${M2_BASE}/${combo.type}/${combo.op}/${combo.city}/${combo.barrio}/`
+      : `${M2_BASE}/${combo.type}/${combo.op}/${combo.city}/`;
     let html: string;
     try {
       html = await fetchText(url, { userAgent: M2_UA });

@@ -11,7 +11,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { runAllScrapers } from '@/lib/scrapers/runner';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // segundos — Vercel Pro permite hasta 800s en Edge
+// Vercel Pro permite hasta 800s. Con scraping de barrios premium (~216 combos
+// ahora) un run completo tarda ~15-25 min. Si Vercel tira timeout, el scraper
+// igual está corriendo desde GitHub Actions (que no tiene este límite).
+export const maxDuration = 800;
 
 export async function POST(request: NextRequest) {
   const auth = request.headers.get('authorization');
