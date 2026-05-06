@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
   // Rate limit: 100 mensajes / minuto / session_id.
   const rl = checkRateLimit(`chat:${session_id}`, 100, 60_000);
   if (!rl.allowed) {
-    return jsonError('Límite de mensajes alcanzado. Esperá un minuto.', 429);
+    return jsonError('Límite de mensajes alcanzado. Espere un minuto.', 429);
   }
 
   try {

@@ -91,6 +91,8 @@ export async function generateAIResponse(
   let truncated = true;
   // Set por requestContact tool — fuerza promoción a lead al final del turn.
   let contactRecorded = false;
+  // Bug-fix: si el modelo cierra end_turn sin texto (después de tools), reintentamos UNA vez.
+  let emptyTextRetried = false;
 
   // Validar invariante del history rehidratado antes del primer call.
   validateMessages(messages);
@@ -127,7 +129,6 @@ export async function generateAIResponse(
     }
 
     if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
-      // Respuesta final. Persistir y salir.
       const textBlocks = response.content.filter(
         (b): b is Anthropic.TextBlock => b.type === 'text'
       );
@@ -135,6 +136,30 @@ export async function generateAIResponse(
       const toolUseBlocks = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
       );
+
+      // Bug-fix: si end_turn pero sin texto al usuario y ya hubo tools en este turn,
+      // el modelo cerró sin responder. Forzamos UNA iteración más con un nudge.
+      // Caso típico: modelo llamó recordUserPreferences y cerró sin texto.
+      if (!finalText && !emptyTextRetried && iter > 0) {
+        emptyTextRetried = true;
+        // Persistir el assistant turn vacío (con tool_use si aplica) para mantener el invariante.
+        const echoableContent = response.content.filter(
+          (b) => b.type === 'text' || b.type === 'tool_use'
+        ) as Array<Anthropic.TextBlock | Anthropic.ToolUseBlock>;
+        if (echoableContent.length > 0) {
+          messages.push({ role: 'assistant', content: echoableContent });
+        }
+        // Nudge al modelo: pedir explícitamente respuesta de texto al usuario.
+        messages.push({
+          role: 'user',
+          content:
+            'Por favor, da una respuesta clara y útil al usuario en este momento. NUNCA cierres un turno sin texto al usuario — eso lo deja sin información. Genera la respuesta ahora basándote en el contexto y resultados que ya tienes.',
+        });
+        validateMessages(messages);
+        continue;
+      }
+
+      // Respuesta final normal. Persistir y salir.
       await appendMessage(conversation.id, {
         role: 'assistant',
         content: finalText,
