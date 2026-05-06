@@ -38,13 +38,16 @@ function getClient(): SupabaseClient {
 
 const ALTERNATIVE_ZONES_BOGOTA: Record<string, string[]> = {
   // ── Norte premium (estrato 6) ──
+  // OJO: los values son nombres EXACTOS como aparecen en BD (case-preserving).
+  // Verificado mayo 2026: BD tiene "Los Rosales", "El Chicó", "La Cabrera", etc.
   rosales: ['El Chicó', 'La Cabrera', 'El Nogal', 'Quinta Camacho', 'El Refugio'],
-  'el chico': ['Rosales', 'La Cabrera', 'El Nogal', 'Country Club', 'Chicó Norte'],
-  chico: ['Rosales', 'La Cabrera', 'El Nogal', 'Country Club', 'Chicó Norte'],
-  'chico norte': ['El Chicó', 'Rosales', 'La Cabrera', 'Country Club'],
-  'la cabrera': ['Rosales', 'El Chicó', 'El Nogal', 'Quinta Camacho'],
-  'el nogal': ['Rosales', 'El Chicó', 'La Cabrera', 'Quinta Camacho'],
-  'el refugio': ['Rosales', 'El Chicó', 'La Cabrera'],
+  'los rosales': ['El Chicó', 'La Cabrera', 'El Nogal', 'Quinta Camacho', 'El Refugio'],
+  'el chico': ['Los Rosales', 'La Cabrera', 'El Nogal', 'Country Club', 'Chicó Norte'],
+  chico: ['Los Rosales', 'La Cabrera', 'El Nogal', 'Country Club', 'Chicó Norte'],
+  'chico norte': ['El Chicó', 'Los Rosales', 'La Cabrera', 'Country Club'],
+  'la cabrera': ['Los Rosales', 'El Chicó', 'El Nogal', 'Quinta Camacho'],
+  'el nogal': ['Los Rosales', 'El Chicó', 'La Cabrera', 'Quinta Camacho'],
+  'el refugio': ['Los Rosales', 'El Chicó', 'La Cabrera'],
   'country club': ['El Chicó', 'Santa Bárbara', 'Bella Suiza', 'Cedritos'],
   'santa barbara': ['Country Club', 'Cedritos', 'Bella Suiza', 'Usaquén'],
   'santa bárbara': ['Country Club', 'Cedritos', 'Bella Suiza', 'Usaquén'],
@@ -207,6 +210,13 @@ export async function findAlternativeZones(
     effectiveMinPrice = Math.round(input.max_price * 0.7);
   }
 
+  // .in() es case-sensitive — para tolerar variantes de capitalización en BD,
+  // construimos un OR de ILIKEs. Cada neighborhood se compara case-insensitive.
+  // Esto cubre casos como BD="Los Rosales" cuando el mapping tiene "Rosales".
+  const ilikeFilters = allNeighborhoods
+    .map((n) => `neighborhood.ilike.${n.replace(/[,()]/g, ' ')}`)
+    .join(',');
+
   let q = sb
     .from('properties')
     .select(
@@ -214,7 +224,7 @@ export async function findAlternativeZones(
     )
     .eq('city', input.city)
     .eq('is_duplicate', false)
-    .in('neighborhood', allNeighborhoods);
+    .or(ilikeFilters);
   if (input.property_type) q = q.eq('property_type', input.property_type);
   if (input.listing_type) q = q.eq('listing_type', input.listing_type);
   if (effectiveMinPrice !== undefined) q = q.gte('price_cop', effectiveMinPrice);

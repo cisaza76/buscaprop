@@ -27,6 +27,7 @@ import {
   getPriceHistory,
 } from '@/lib/ai/analytics';
 import { findAlternativeZones } from '@/lib/ai/zone-alternatives';
+import { resolveNeighborhood } from '@/lib/ai/neighborhood-normalization';
 import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
 import { getCadastralForProperty } from '@/lib/cadastre/repository';
 import { soilClassificationLabel } from '@/lib/cadastre/ideca';
@@ -541,9 +542,28 @@ export async function executeTool(
 }
 
 async function runSearchProperties(input: Record<string, unknown>): Promise<string> {
+  // Normalizar el barrio antes de buscar. Si el user dice "Rosales" pero la
+  // BD tiene "Los Rosales", queremos buscar por "Los Rosales".
+  const cityRaw = input.city as string | undefined;
+  const neighborhoodRaw = input.neighborhood as string | undefined;
+  let resolvedNeighborhood = neighborhoodRaw;
+  let resolutionInfo: { source: string; candidates: string[] } | null = null;
+  if (cityRaw && neighborhoodRaw) {
+    const r = await resolveNeighborhood(cityRaw, neighborhoodRaw);
+    if (r.canonical) {
+      resolvedNeighborhood = r.canonical;
+      resolutionInfo = { source: r.source, candidates: r.candidates };
+    } else if (r.candidates.length > 0) {
+      // No resolvió pero hay candidates ambiguos — pasamos null y exponemos
+      // los candidates en la respuesta para que la AI le pregunte al user.
+      resolvedNeighborhood = undefined;
+      resolutionInfo = { source: 'ambiguous', candidates: r.candidates };
+    }
+  }
+
   const { properties, count } = await searchProperties({
-    city: input.city as string | undefined,
-    neighborhood: input.neighborhood as string | undefined,
+    city: cityRaw,
+    neighborhood: resolvedNeighborhood,
     property_type: input.property_type as string | undefined,
     listing_type: input.listing_type as 'venta' | 'arriendo' | undefined,
     min_bedrooms: input.min_bedrooms as number | undefined,
@@ -554,7 +574,22 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
   });
 
   if (properties.length === 0) {
-    return `No se encontraron propiedades con esos filtros (count exacto: ${count ?? 0}).`;
+    // Si NO resolvió el barrio y hay candidates, exponerlos para que la AI
+    // le pregunte al user cuál de los barrios reales quiere.
+    if (resolutionInfo && resolutionInfo.source === 'ambiguous') {
+      return JSON.stringify({
+        properties: [],
+        count: 0,
+        warning: `Barrio "${neighborhoodRaw}" es ambiguo. Posibles coincidencias en ${cityRaw}: ${resolutionInfo.candidates.join(', ')}. Preguntale al user cuál de estos quiere.`,
+        candidate_neighborhoods: resolutionInfo.candidates,
+      });
+    }
+    return JSON.stringify({
+      properties: [],
+      count: count ?? 0,
+      message: `No se encontraron propiedades con esos filtros. Si pediste un barrio específico, considerá llamar findAlternativeZones para buscar en zonas vecinas.`,
+      resolved_neighborhood: resolvedNeighborhood ?? null,
+    });
   }
 
   const summary = properties.map((p) => ({
@@ -725,9 +760,14 @@ async function runFindAlternativeZones(
   if (!city || !original) {
     return JSON.stringify({ error: 'Faltan city y original_neighborhood.' });
   }
+  // Normalizar el barrio original — usamos el canonical para que el mapping
+  // del helper matchee correctamente (ej: "Rosales" → "Los Rosales").
+  const resolved = await resolveNeighborhood(city, original);
+  const canonicalOriginal = resolved.canonical ?? original;
+
   const result = await findAlternativeZones({
     city,
-    original_neighborhood: original,
+    original_neighborhood: canonicalOriginal,
     property_type: input.property_type as
       | 'apartamento'
       | 'casa'

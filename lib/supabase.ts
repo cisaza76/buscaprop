@@ -242,7 +242,13 @@ export async function searchProperties(filters: {
     query = query.ilike('title', `%${q}%`);
   }
   if (filters.city) query = query.eq('city', filters.city);
-  if (filters.neighborhood) query = query.eq('neighborhood', filters.neighborhood);
+  // CRÍTICO: el barrio puede llegar con capitalización/forma distinta de la que
+  // está en BD (ej: user dice "Rosales" pero BD tiene "Los Rosales"). Usamos
+  // ILIKE para tolerar casos comunes. La normalización profunda (alias canónico)
+  // se hace upstream en lib/ai/tools.ts antes de llamar acá.
+  if (filters.neighborhood) {
+    query = query.ilike('neighborhood', filters.neighborhood);
+  }
   if (filters.listing_type) query = query.eq('listing_type', filters.listing_type);
   if (filters.property_type) query = query.eq('property_type', filters.property_type);
   if (filters.min_price) query = query.gte('price_cop', filters.min_price);
