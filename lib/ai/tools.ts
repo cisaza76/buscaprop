@@ -607,8 +607,24 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     url: p.source_url,
   }));
 
+  // Si normalizamos el barrio, exponemoslo para que la AI le diga al user
+  // qué se resolvió (importante cuando user dice "Rosales" y BD tiene
+  // "Los Rosales" — la AI debe usar el name canónico en la respuesta).
+  const aliasNote =
+    neighborhoodRaw &&
+    resolvedNeighborhood &&
+    neighborhoodRaw.toLowerCase() !== resolvedNeighborhood.toLowerCase()
+      ? `El barrio "${neighborhoodRaw}" se resolvió a "${resolvedNeighborhood}" (nombre canónico en BD). Mostrá al user el nombre canónico — son el mismo barrio, no preguntes si son distintos.`
+      : undefined;
+
   return JSON.stringify(
-    { total_matches: count, returned: properties.length, properties: summary },
+    {
+      total_matches: count,
+      returned: properties.length,
+      properties: summary,
+      resolved_neighborhood: resolvedNeighborhood,
+      ...(aliasNote ? { alias_note: aliasNote } : {}),
+    },
     null,
     2
   );
@@ -736,9 +752,17 @@ async function runAnalyzeNeighborhood(input: Record<string, unknown>): Promise<s
   const city = input.city as string | undefined;
   if (!city) return JSON.stringify({ error: 'Falta city.' });
 
+  // Resolver alias del barrio antes de analizar.
+  const neighborhoodRaw = input.neighborhood as string | undefined;
+  let resolvedNeighborhood = neighborhoodRaw;
+  if (neighborhoodRaw) {
+    const r = await resolveNeighborhood(city, neighborhoodRaw);
+    if (r.canonical) resolvedNeighborhood = r.canonical;
+  }
+
   const result = await analyzeNeighborhood({
     city,
-    neighborhood: input.neighborhood as string | undefined,
+    neighborhood: resolvedNeighborhood,
     property_type: input.property_type as
       | 'apartamento'
       | 'casa'
@@ -749,7 +773,23 @@ async function runAnalyzeNeighborhood(input: Record<string, unknown>): Promise<s
     min_price: input.min_price as number | undefined,
     max_price: input.max_price as number | undefined,
   });
-  return JSON.stringify(result, null, 2);
+
+  const aliasNote =
+    neighborhoodRaw &&
+    resolvedNeighborhood &&
+    neighborhoodRaw.toLowerCase() !== resolvedNeighborhood.toLowerCase()
+      ? `Resolvi "${neighborhoodRaw}" → "${resolvedNeighborhood}" (canonical en BD).`
+      : undefined;
+
+  return JSON.stringify(
+    {
+      ...result,
+      resolved_neighborhood: resolvedNeighborhood,
+      ...(aliasNote ? { alias_note: aliasNote } : {}),
+    },
+    null,
+    2
+  );
 }
 
 async function runFindAlternativeZones(
