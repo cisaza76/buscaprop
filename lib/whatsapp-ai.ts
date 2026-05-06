@@ -153,7 +153,7 @@ export async function generateAIResponse(
         messages.push({
           role: 'user',
           content:
-            'Por favor, da una respuesta clara y útil al usuario en este momento. NUNCA cierres un turno sin texto al usuario — eso lo deja sin información. Genera la respuesta ahora basándote en el contexto y resultados que ya tienes.',
+            'Por favor, da una respuesta completa y útil al usuario en este momento (4-8 líneas). NUNCA cierres un turno sin texto al usuario. Si llamaste tools, usa esa información para responder concretamente. Si necesitas más info del cliente, termina con UNA pregunta usando signo de interrogación ("¿...?"). Genera la respuesta ahora.',
         });
         validateMessages(messages);
         continue;

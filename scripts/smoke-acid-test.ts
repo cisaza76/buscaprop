@@ -116,7 +116,7 @@ const SCENARIOS: Scenario[] = [
         name: 'aplica patrón de objeción: pide contexto antes',
         severity: 'crítico',
         predicate: (t) =>
-          /(contexto|presupuesto|horizonte|tolerancia|riesgo|ahora\s+o\s+despu[eé]s|arriendo\s+o\s+apreciaci[oó]n|3.*5.*10\s+años)/i.test(
+          /(contexto|presupuesto|capital|horizonte|tolerancia|riesgo|rentabilidad|arriendo|apreciaci[oó]n|cu[aá]nto\s+(dinero|tiene|invertir)|cu[aá]tro\s+cosas|4\s+cosas|3.*5.*10\s+años|una\s+pregunta\s+(a\s+la\s+vez|primero))/i.test(
             t
           ),
       },

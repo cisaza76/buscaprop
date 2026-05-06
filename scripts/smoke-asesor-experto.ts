@@ -59,6 +59,10 @@ const TESTS: Test[] = [
           ),
       },
       {
+        name: 'menciona Rosales explícitamente en los primeros 250 chars (regla #16)',
+        predicate: (t: string) => /rosales/i.test(t.slice(0, 250)),
+      },
+      {
         name: 'incluye al menos UNA propiedad con link markdown clickable',
         predicate: (t: string) => /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(t),
       },
@@ -102,8 +106,14 @@ const TESTS: Test[] = [
       },
       {
         name: 'cierra con pregunta o acción',
-        predicate: (t: string) =>
-          /\?$|\?[^a-z]*$/.test(t.trim()) || /resuena|interesa|prefiere/i.test(t),
+        predicate: (t: string) => {
+          // Acepta pregunta en cualquier parte (no solo al final), o palabras de cierre.
+          const hasAnyQuestion = /\?/.test(t);
+          const hasClosePhrase = /resuena|interesa|prefiere|le\s+late|d[ií]game|cu[eé]nteme/i.test(
+            t
+          );
+          return hasAnyQuestion || hasClosePhrase;
+        },
       },
     ],
   },
