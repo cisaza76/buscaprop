@@ -136,6 +136,9 @@ export interface FindAlternativeZonesInput {
   listing_type?: 'venta' | 'arriendo';
   min_price?: number;
   max_price?: number;
+  min_bedrooms?: number;
+  /** Para "2 cuartos exactos" mandá max_bedrooms=min_bedrooms=2. */
+  max_bedrooms?: number;
   /** Cuántas propiedades sample por zona alternativa. Default 3, máx 5. */
   samples_per_zone?: number;
 }
@@ -216,6 +219,8 @@ export async function findAlternativeZones(
   if (input.listing_type) q = q.eq('listing_type', input.listing_type);
   if (effectiveMinPrice !== undefined) q = q.gte('price_cop', effectiveMinPrice);
   if (input.max_price !== undefined) q = q.lte('price_cop', input.max_price);
+  if (input.min_bedrooms !== undefined) q = q.gte('bedrooms', input.min_bedrooms);
+  if (input.max_bedrooms !== undefined) q = q.lte('bedrooms', input.max_bedrooms);
 
   const { data, error } = await q.limit(500);
   if (error) {

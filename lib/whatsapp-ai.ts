@@ -30,8 +30,12 @@ import {
 import { calculateLeadScore, isQualifiedLead } from './ai/scoring';
 
 const MODEL = 'claude-haiku-4-5';
-const MAX_TOKENS = 1024; // respuestas cortas tipo WhatsApp
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_TOKENS = 1500; // permitir respuestas más completas (Opción A/B/C)
+// Subido de 5 a 10 — el flujo del asesor experto encadena hasta 6-7 tools
+// (searchProperties + analyzeNeighborhood + findAlternativeZones +
+// recordUserPreferences + a veces fetchPropertyById + getPriceHistory).
+// Con cap=5 muchos turns terminaban sin texto final.
+const MAX_TOOL_ITERATIONS = 10;
 
 // Singleton client. La SDK reusa keep-alive y pool de conexiones.
 let cachedClient: Anthropic | null = null;
@@ -112,6 +116,15 @@ export async function generateAIResponse(
     totalUsage.output += response.usage.output_tokens;
     totalUsage.cacheRead += response.usage.cache_read_input_tokens ?? 0;
     totalUsage.cacheCreate += response.usage.cache_creation_input_tokens ?? 0;
+
+    // Log de debugging — mostrar el estado de cada iter en stderr.
+    if (process.env.AI_DEBUG === '1') {
+      const tool_use_count = response.content.filter((b) => b.type === 'tool_use').length;
+      const text_count = response.content.filter((b) => b.type === 'text').length;
+      console.error(
+        `[ai-engine iter ${iter}] stop=${response.stop_reason} text_blocks=${text_count} tool_use=${tool_use_count}`
+      );
+    }
 
     if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
       // Respuesta final. Persistir y salir.

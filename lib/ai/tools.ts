@@ -70,7 +70,13 @@ export const TOOLS: Anthropic.Tool[] = [
         },
         min_bedrooms: {
           type: 'number',
-          description: 'Mínimo de habitaciones requeridas.',
+          description:
+            'Mínimo de habitaciones. CRÍTICO: cuando el user dice "2 cuartos" / "2 habitaciones" exacto, pasá min_bedrooms=2 Y max_bedrooms=2. Si no, la búsqueda devolverá también 3, 4, 5+ — incumpliendo el criterio del user.',
+        },
+        max_bedrooms: {
+          type: 'number',
+          description:
+            'Máximo de habitaciones. Pasalo SIEMPRE que el user dijo un número exacto (ej: "2 cuartos" → max_bedrooms=2). Para "al menos 2" omitilo.',
         },
         min_price: {
           type: 'number',
@@ -270,6 +276,16 @@ export const TOOLS: Anthropic.Tool[] = [
         max_price: {
           type: 'number',
           description: 'Precio máximo en COP — mismo que pasaste a searchProperties.',
+        },
+        min_bedrooms: {
+          type: 'number',
+          description:
+            'Pasá EXACTAMENTE el mismo que mandaste a searchProperties. Si el user dijo "2 cuartos", min=2 Y max=2.',
+        },
+        max_bedrooms: {
+          type: 'number',
+          description:
+            'Pasá EXACTAMENTE el mismo que mandaste a searchProperties. Si el user dijo "2 cuartos" exacto, pasá max=2.',
         },
       },
       required: ['city', 'original_neighborhood'],
@@ -531,6 +547,7 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     property_type: input.property_type as string | undefined,
     listing_type: input.listing_type as 'venta' | 'arriendo' | undefined,
     min_bedrooms: input.min_bedrooms as number | undefined,
+    max_bedrooms: input.max_bedrooms as number | undefined,
     min_price: input.min_price as number | undefined,
     max_price: input.max_price as number | undefined,
     limit: 5,
@@ -720,6 +737,8 @@ async function runFindAlternativeZones(
     listing_type: input.listing_type as 'venta' | 'arriendo' | undefined,
     min_price: input.min_price as number | undefined,
     max_price: input.max_price as number | undefined,
+    min_bedrooms: input.min_bedrooms as number | undefined,
+    max_bedrooms: input.max_bedrooms as number | undefined,
   });
   return JSON.stringify(result, null, 2);
 }

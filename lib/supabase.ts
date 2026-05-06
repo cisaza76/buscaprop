@@ -221,6 +221,8 @@ export async function searchProperties(filters: {
   min_price?: number;
   max_price?: number;
   min_bedrooms?: number;
+  /** Máximo habitaciones. Útil para "2 cuartos exactos" → max=min=2. */
+  max_bedrooms?: number;
   min_area?: number;
   limit?: number;
   offset?: number;
@@ -246,6 +248,7 @@ export async function searchProperties(filters: {
   if (filters.min_price) query = query.gte('price_cop', filters.min_price);
   if (filters.max_price) query = query.lte('price_cop', filters.max_price);
   if (filters.min_bedrooms) query = query.gte('bedrooms', filters.min_bedrooms);
+  if (filters.max_bedrooms) query = query.lte('bedrooms', filters.max_bedrooms);
   if (filters.min_area) query = query.gte('area_m2', filters.min_area);
 
   const limit = filters.limit || 50;
