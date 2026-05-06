@@ -45,16 +45,16 @@ const TESTS: Test[] = [
           ),
       },
       {
-        name: 'NO inventa alternativas pidiendo permiso ("¿querés que mire en X?")',
+        name: 'NO inventa alternativas pidiendo permiso ("¿quiere que mire en X?" / "¿querés que...?")',
         predicate: (t: string) =>
-          !/[¿?]?\s*(quer[eé]s|prefer[ií]s|te muestro|te busco)\s+(que\s+)?(mire|veamos|busquemos|ver|explorar)\s+(alternativas|en\s+otros|en\s+barrios|en\s+\w+)/i.test(
+          !/[¿?]?\s*(quer[eé]s|prefer[ií]s|quiere|prefiere|le\s+(muestro|busco)|te\s+(muestro|busco))\s+(que\s+)?(mire|veamos|busquemos|ver|explorar)\s+(alternativas|en\s+otros|en\s+barrios|en\s+\w+)/i.test(
             t
           ),
       },
       {
-        name: 'reconocimiento honesto al inicio (frase tipo "Te voy a ser honesto" / "realidad" / "premium")',
+        name: 'reconocimiento honesto al inicio (frase tipo "Le voy a ser honesto" / "realidad" / "premium")',
         predicate: (t: string) =>
-          /(te\s+voy\s+a\s+ser\s+honesto|honesto|ac[aá]\s+est[aá]\s+la\s+realidad|d[eé]jame\s+ayudarte|he\s+visto\s+esto|panorama|realidad\s+del\s+mercado|premium|escaso|inventario\s+real)/i.test(
+          /(le\s+voy\s+a\s+ser\s+honesto|para\s+serle\s+honesto|te\s+voy\s+a\s+ser\s+honesto|honesto|aqu[ií]\s+est[aá]\s+la\s+realidad|ac[aá]\s+est[aá]\s+la\s+realidad|perm[ií]tame\s+(mostrar|ayudar)|d[eé]jame\s+ayudarte|he\s+visto\s+esto|panorama|realidad\s+del\s+mercado|premium|escaso|inventario\s+real)/i.test(
             t
           ),
       },

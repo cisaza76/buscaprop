@@ -267,7 +267,7 @@ export async function generateAIResponse(
   }
 
   return {
-    text: finalText || 'No pude generar una respuesta. Intentá reformular la pregunta.',
+    text: finalText || 'Disculpe, no pude generar una respuesta. ¿Podría reformular la pregunta?',
     leadScore: breakdown.total,
     promotedToLead,
     toolsUsed,

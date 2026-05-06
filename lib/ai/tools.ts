@@ -241,8 +241,8 @@ export const TOOLS: Anthropic.Tool[] = [
     name: 'findAlternativeZones',
     description:
       'CRÍTICO: cuando searchProperties devuelve 0 o muy pocos resultados (<2) en un barrio ' +
-      'específico que el user pidió, llamá esta tool INMEDIATAMENTE. NO le preguntes al user ' +
-      '"¿querés ver alternativas?" — buscalas vos y mostralas.\n\n' +
+      'específico que el user pidió, llama esta tool INMEDIATAMENTE. NO le preguntes al user ' +
+      '"¿quiere ver alternativas?" — búscalas tú y muéstralas.\n\n' +
       'La tool busca propiedades reales (no inventadas) en barrios vecinos del mismo perfil ' +
       'socioeconómico, dentro del MISMO rango de precio que el user pidió. Devuelve por cada ' +
       'zona alternativa: count, precio promedio + por m², rango min/max, y 2-3 propiedades sample ' +
@@ -299,7 +299,7 @@ export const TOOLS: Anthropic.Tool[] = [
       'tipo, ±10% precio, ±1 habitación. Cada comparable incluye su \`price_diff_pct\` (negativo = ' +
       'más barato que la referencia). Útil después de que el user mostró interés en una propiedad ' +
       'concreta, para validar si el precio es de mercado u ofrecer alternativas similares. ' +
-      'Si no hay comparables, mostrá el warning — no inventes.',
+      'Si no hay comparables, muestra el warning — no inventes.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -322,9 +322,9 @@ export const TOOLS: Anthropic.Tool[] = [
       'Devuelve el histórico real de precio de una propiedad: cuándo apareció, ' +
       'cuántos días lleva publicada, si bajó/subió de precio (con magnitudes), y si fue ' +
       'retirada (delisted). Solo afirma lo que está en la respuesta — si \`price_changes_count\` ' +
-      'es 0, NO digas "el precio se mantuvo estable" como si fuera análisis; decí "no hubo ' +
+      'es 0, NO digas "el precio se mantuvo estable" como si fuera análisis; di "no hubo ' +
       'cambios registrados en X días". Si days_on_market es alto (>60 días) puede ser señal ' +
-      'de precio inflado. Si hay drops, mencionalos al user — es info accionable.',
+      'de precio inflado. Si hay drops, menciónalos al user — es info accionable.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -346,12 +346,12 @@ export const TOOLS: Anthropic.Tool[] = [
       'Analiza las fotos de una propiedad (vía Claude Vision) y devuelve descriptores ' +
       'visuales objetivos: nivel de luz, estilo de acabados, mobiliario aparente, tipo de ' +
       'cocina, tipo de piso, vista, features visibles. Útil cuando el user pregunta cómo ' +
-      'se ve la propiedad o cuando querés agregar contexto visual a una recomendación. ' +
+      'se ve la propiedad o cuando quieres agregar contexto visual a una recomendación. ' +
       'IMPORTANTE: el resultado solo describe lo VISIBLE en las fotos — NO afirma antigüedad ' +
       'de renovaciones, NO detecta humedad/grietas/instalaciones, NO estima costos. ' +
-      'Cuando la AI use el resultado: parafraseá los descriptores con prudencia ("se ve" / ' +
+      'Cuando la AI use el resultado: parafrasea los descriptores con prudencia ("se ve" / ' +
       '"aparenta") y NUNCA agregues afirmaciones que el resultado no contiene. ' +
-      'Si appearance_overall es "needs_work" mencionalo como "algunas zonas con desgaste ' +
+      'Si appearance_overall es "needs_work" menciónalo como "algunas zonas con desgaste ' +
       'visible — vale la pena verificar en visita".',
     input_schema: {
       type: 'object' as const,
@@ -379,7 +379,7 @@ export const TOOLS: Anthropic.Tool[] = [
       'un apto dentro de un lote más grande — eso es normal. ' +
       'IMPORTANTE: status puede ser "verified" (data buena), "not_found" (la propiedad no ' +
       'cayó en catastro de Bogotá — puede ser rural o fuera de la ciudad), o "error" (falló ' +
-      'la consulta). Si no es verified, NO inventes nada — solo decí que no se pudo verificar. ' +
+      'la consulta). Si no es verified, NO inventes nada — solo di que no se pudo verificar. ' +
       'NO afirmes propiedad legal, gravámenes, ni paz y salvo predial — IDECA solo da datos ' +
       'físicos y de planeamiento, NO legales.',
     input_schema: {
@@ -404,10 +404,10 @@ export const TOOLS: Anthropic.Tool[] = [
       'Estados SNR posibles: "valid" (validado), "received" (SNR procesó pero sin afirmación ' +
       'fuerte), "expired" (>30 días desde impresión), "invalid" (SNR rechazó), "pending" o ' +
       '"error" (no se pudo validar). ' +
-      'IMPORTANTE: si has_active_liens=true, el comprador DEBE saber — mencionalo claramente ' +
-      'con el active_liens_summary. Si snr_status no es "valid", aclará que la validación ' +
-      'contra SNR no se pudo completar y recomendá verificar manualmente en ' +
-      'supernotariado.gov.co. Si no hay certificado subido, decí que el agente puede ' +
+      'IMPORTANTE: si has_active_liens=true, el comprador DEBE saber — menciónalo claramente ' +
+      'con el active_liens_summary. Si snr_status no es "valid", aclara que la validación ' +
+      'contra SNR no se pudo completar y recomienda verificar manualmente en ' +
+      'supernotariado.gov.co. Si no hay certificado subido, di que el agente puede ' +
       'subirlo desde el detalle de la propiedad.',
     input_schema: {
       type: 'object' as const,
