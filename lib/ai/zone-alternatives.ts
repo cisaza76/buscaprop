@@ -194,6 +194,16 @@ export async function findAlternativeZones(
   // los resultados tengan el mismo perfil que el user pidió.
   const allNeighborhoods = [input.original_neighborhood, ...alternativeNames];
 
+  // Defensa interna: si solo viene max_price (sin min_price), aplicamos un
+  // piso implícito de max*0.7. Esto evita devolver el bucket entero del barrio
+  // (ej: si user pide "$14M arriendo" y la AI solo manda max_price, sin este
+  // piso el helper devolvía opciones desde $1M — fuera de rango pedido).
+  // Mantenemos el min explícito si lo recibimos.
+  let effectiveMinPrice = input.min_price;
+  if (effectiveMinPrice === undefined && input.max_price !== undefined) {
+    effectiveMinPrice = Math.round(input.max_price * 0.7);
+  }
+
   let q = sb
     .from('properties')
     .select(
@@ -204,7 +214,7 @@ export async function findAlternativeZones(
     .in('neighborhood', allNeighborhoods);
   if (input.property_type) q = q.eq('property_type', input.property_type);
   if (input.listing_type) q = q.eq('listing_type', input.listing_type);
-  if (input.min_price !== undefined) q = q.gte('price_cop', input.min_price);
+  if (effectiveMinPrice !== undefined) q = q.gte('price_cop', effectiveMinPrice);
   if (input.max_price !== undefined) q = q.lte('price_cop', input.max_price);
 
   const { data, error } = await q.limit(500);

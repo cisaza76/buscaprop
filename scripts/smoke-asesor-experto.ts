@@ -25,17 +25,17 @@ interface Test {
 
 const TESTS: Test[] = [
   {
-    label: 'Test 1 — "Rosales $14-16M arriendo"',
-    message:
-      'Quiero un apartamento en arriendo en Rosales, presupuesto entre 14 y 16 millones',
+    label: 'Test 1 — "Rosales $14M arriendo 3 cuartos" (caso reportado por user)',
+    message: 'Quiero apartamento en Rosales, $14M en arriendo de 3 cuartos',
     checks: [
       {
         name: 'llama searchProperties (intentó en Rosales primero)',
-        predicate: (_t, tools) => tools.includes('searchProperties'),
+        predicate: (_t: string, tools: string[]) => tools.includes('searchProperties'),
       },
       {
         name: 'llama findAlternativeZones (no preguntó, BUSCÓ)',
-        predicate: (_t, tools) => tools.includes('findAlternativeZones'),
+        predicate: (_t: string, tools: string[]) =>
+          tools.includes('findAlternativeZones'),
       },
       {
         name: 'menciona al menos 1 barrio alternativo real (Chicó / La Cabrera / etc.)',
@@ -52,11 +52,31 @@ const TESTS: Test[] = [
           ),
       },
       {
-        name: 'cierra con pregunta o acción concreta',
+        name: 'reconocimiento honesto al inicio (frase tipo "Te voy a ser honesto" / "realidad" / "premium")',
         predicate: (t: string) =>
-          /\?/.test(t) ||
-          /^\s*\d+\.\s/m.test(t) ||
-          /(agendar|tel[eé]fono|env[ií]o|cu[eé]ntame|av[ií]same|coordinemos)/i.test(t),
+          /(te\s+voy\s+a\s+ser\s+honesto|honesto|ac[aá]\s+est[aá]\s+la\s+realidad|d[eé]jame\s+ayudarte|he\s+visto\s+esto|panorama|realidad\s+del\s+mercado|premium|escaso|inventario\s+real)/i.test(
+            t
+          ),
+      },
+      {
+        name: 'incluye al menos UNA propiedad con link markdown clickable',
+        predicate: (t: string) => /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(t),
+      },
+      {
+        name: 'NO muestra precios irrelevantes muy abajo del rango pedido (bug $2-8M en rango $14M)',
+        predicate: (t: string) => {
+          // Buscar promedios/rangos abajo de $9M (70% de $14M = $9.8M).
+          const lowPrice =
+            /(promedio|rango|desde|opciones?\s+(?:a|de))[^.\n]{0,30}\$[1-8](?:[.,]\d+)?\s*M\b/i;
+          return !lowPrice.test(t);
+        },
+      },
+      {
+        name: 'cierra con pregunta única (1-2 signos máximo)',
+        predicate: (t: string) => {
+          const qs = (t.match(/\?/g) ?? []).length;
+          return qs >= 1 && qs <= 2;
+        },
       },
     ],
   },
