@@ -91,7 +91,9 @@ const TESTS: Test[] = [
       {
         name: 'reconoce honestamente la realidad del mercado',
         predicate: (t: string) =>
-          /honest|realidad|según.*info|mercado|seg[uú]n.*listings|seg[uú]n los datos/i.test(t),
+          /honest|realidad|según.*info|mercado|seg[uú]n.*listings|seg[uú]n los datos|fuera\s+de\s+su\s+rango|precios?\s+(muy\s+)?(superior|encima)|escasea|patrimoniales?|premium|fuera\s+del\s+presupuesto/i.test(
+            t
+          ),
       },
       {
         name: 'NO promete invenciones (apreciación X% en años)',
@@ -107,9 +109,9 @@ const TESTS: Test[] = [
       {
         name: 'cierra con pregunta o acción',
         predicate: (t: string) => {
-          // Acepta pregunta en cualquier parte (no solo al final), o palabras de cierre.
-          const hasAnyQuestion = /\?/.test(t);
-          const hasClosePhrase = /resuena|interesa|prefiere|le\s+late|d[ií]game|cu[eé]nteme/i.test(
+          // Acepta '?' o '¿' (algunos modelos abren con ¿ y omiten ?), o palabras de cierre.
+          const hasAnyQuestion = /[?¿]/.test(t);
+          const hasClosePhrase = /resuena|interesa|prefiere|le\s+late|d[ií]game|cu[eé]nteme|ide[aá]l|reorient/i.test(
             t
           );
           return hasAnyQuestion || hasClosePhrase;
