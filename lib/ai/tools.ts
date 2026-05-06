@@ -26,6 +26,7 @@ import {
   simulateCredit,
   getPriceHistory,
 } from '@/lib/ai/analytics';
+import { findAlternativeZones } from '@/lib/ai/zone-alternatives';
 import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
 import { getCadastralForProperty } from '@/lib/cadastre/repository';
 import { soilClassificationLabel } from '@/lib/cadastre/ideca';
@@ -227,6 +228,51 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ['city'],
+    },
+  },
+  {
+    name: 'findAlternativeZones',
+    description:
+      'CRÍTICO: cuando searchProperties devuelve 0 o muy pocos resultados (<2) en un barrio ' +
+      'específico que el user pidió, llamá esta tool INMEDIATAMENTE. NO le preguntes al user ' +
+      '"¿querés ver alternativas?" — buscalas vos y mostralas.\n\n' +
+      'La tool busca propiedades reales (no inventadas) en barrios vecinos del mismo perfil ' +
+      'socioeconómico, dentro del MISMO rango de precio que el user pidió. Devuelve por cada ' +
+      'zona alternativa: count, precio promedio + por m², rango min/max, y 2-3 propiedades sample ' +
+      'con URL al portal. Eso te da material concreto para mostrar opciones reales.\n\n' +
+      'Mapping curado para Bogotá (Rosales→Chicó/La Cabrera/El Nogal, etc.), Medellín y Cartagena. ' +
+      'Si la tool devuelve `warning` con "sin mapping", entonces sí preguntale al user qué barrios ' +
+      'cercanos prefiere — pero solo después de intentar.\n\n' +
+      'Pasá los MISMOS filtros (ciudad, tipo, precio, operación) que pasaste a searchProperties.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        city: {
+          type: 'string',
+          description: 'Ciudad (ej: "Bogotá"). Mismo valor que pasaste a searchProperties.',
+        },
+        original_neighborhood: {
+          type: 'string',
+          description: 'El barrio que el user pidió originalmente (ej: "Rosales").',
+        },
+        property_type: {
+          type: 'string',
+          enum: ['apartamento', 'casa', 'oficina', 'lote'],
+        },
+        listing_type: {
+          type: 'string',
+          enum: ['venta', 'arriendo'],
+        },
+        min_price: {
+          type: 'number',
+          description: 'Precio mínimo en COP — mismo que pasaste a searchProperties.',
+        },
+        max_price: {
+          type: 'number',
+          description: 'Precio máximo en COP — mismo que pasaste a searchProperties.',
+        },
+      },
+      required: ['city', 'original_neighborhood'],
     },
   },
   {
@@ -457,6 +503,8 @@ export async function executeTool(
         return { result: await runAnalyzeNeighborhood(input), isError: false };
       case 'findComparables':
         return { result: await runFindComparables(input), isError: false };
+      case 'findAlternativeZones':
+        return { result: await runFindAlternativeZones(input), isError: false };
       case 'simulateCredit':
         return { result: runSimulateCredit(input), isError: false };
       case 'getPriceHistory':
@@ -639,6 +687,30 @@ async function runAnalyzeNeighborhood(input: Record<string, unknown>): Promise<s
   const result = await analyzeNeighborhood({
     city,
     neighborhood: input.neighborhood as string | undefined,
+    property_type: input.property_type as
+      | 'apartamento'
+      | 'casa'
+      | 'oficina'
+      | 'lote'
+      | undefined,
+    listing_type: input.listing_type as 'venta' | 'arriendo' | undefined,
+    min_price: input.min_price as number | undefined,
+    max_price: input.max_price as number | undefined,
+  });
+  return JSON.stringify(result, null, 2);
+}
+
+async function runFindAlternativeZones(
+  input: Record<string, unknown>
+): Promise<string> {
+  const city = input.city as string | undefined;
+  const original = input.original_neighborhood as string | undefined;
+  if (!city || !original) {
+    return JSON.stringify({ error: 'Faltan city y original_neighborhood.' });
+  }
+  const result = await findAlternativeZones({
+    city,
+    original_neighborhood: original,
     property_type: input.property_type as
       | 'apartamento'
       | 'casa'

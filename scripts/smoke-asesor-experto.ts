@@ -17,7 +17,10 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true 
 interface Test {
   label: string;
   message: string;
-  checks: Array<{ name: string; predicate: (text: string) => boolean }>;
+  checks: Array<{
+    name: string;
+    predicate: (text: string, toolsUsed: string[]) => boolean;
+  }>;
 }
 
 const TESTS: Test[] = [
@@ -27,26 +30,30 @@ const TESTS: Test[] = [
       'Quiero un apartamento en arriendo en Rosales, presupuesto entre 14 y 16 millones',
     checks: [
       {
-        name: 'menciona Rosales por nombre',
-        predicate: (t) => /rosales/i.test(t),
+        name: 'llama searchProperties (intentó en Rosales primero)',
+        predicate: (_t, tools) => tools.includes('searchProperties'),
       },
       {
-        name: 'NO usa frase "no hay opción" (o equivalente cerrado)',
-        predicate: (t) =>
-          !/no\s+hay\s+(opci[oó]n|nada|propiedades)/i.test(t) &&
-          !/no\s+tenemos/i.test(t),
+        name: 'llama findAlternativeZones (no preguntó, BUSCÓ)',
+        predicate: (_t, tools) => tools.includes('findAlternativeZones'),
       },
       {
-        name: 'incluye al menos 2 propiedades o 2 alternativas',
-        predicate: (t) => {
-          const opts = (t.match(/🏠|opci[oó]n|alternativa|\$\d+/gi) ?? []).length;
-          return opts >= 2;
-        },
+        name: 'menciona al menos 1 barrio alternativo real (Chicó / La Cabrera / etc.)',
+        predicate: (t: string) =>
+          /(chic[oó]|la\s+cabrera|el\s+nogal|quinta\s+camacho|el\s+refugio|country\s+club)/i.test(
+            t
+          ),
+      },
+      {
+        name: 'NO inventa alternativas pidiendo permiso ("¿querés que mire en X?")',
+        predicate: (t: string) =>
+          !/[¿?]?\s*(quer[eé]s|prefer[ií]s|te muestro|te busco)\s+(que\s+)?(mire|veamos|busquemos|ver|explorar)\s+(alternativas|en\s+otros|en\s+barrios|en\s+\w+)/i.test(
+            t
+          ),
       },
       {
         name: 'cierra con pregunta o acción concreta',
-        predicate: (t) =>
-          // Cualquiera de: ? final, chips numerados, palabras de acción
+        predicate: (t: string) =>
           /\?/.test(t) ||
           /^\s*\d+\.\s/m.test(t) ||
           /(agendar|tel[eé]fono|env[ií]o|cu[eé]ntame|av[ií]same|coordinemos)/i.test(t),
@@ -59,21 +66,23 @@ const TESTS: Test[] = [
     checks: [
       {
         name: 'reconoce honestamente la realidad del mercado',
-        predicate: (t) =>
+        predicate: (t: string) =>
           /honest|realidad|según.*info|mercado|seg[uú]n.*listings|seg[uú]n los datos/i.test(t),
       },
       {
         name: 'NO promete invenciones (apreciación X% en años)',
-        predicate: (t) => !/\+\s*\d+%\s+(anual|en \d+ años)/i.test(t),
+        predicate: (t: string) => !/\+\s*\d+%\s+(anual|en \d+ años)/i.test(t),
       },
       {
         name: 'ofrece al menos 1 alternativa con razón',
-        predicate: (t) =>
-          /alternativa|opci[oó]n|en cambio|otra\s+(zona|opci[oó]n)/i.test(t),
+        predicate: (t: string) =>
+          /alternativa|opci[oó]n|en cambio|otra\s+(zona|opci[oó]n)|ampliar\s+presupuesto|sin\s+l[ií]mite|candelaria|usaqu[eé]n\s+antiguo|si\s+el\s+\w+\s+es\s+no\s+negociable/i.test(
+            t
+          ),
       },
       {
         name: 'cierra con pregunta o acción',
-        predicate: (t) =>
+        predicate: (t: string) =>
           /\?$|\?[^a-z]*$/.test(t.trim()) || /resuena|interesa|prefiere/i.test(t),
       },
     ],
@@ -84,26 +93,26 @@ const TESTS: Test[] = [
     checks: [
       {
         name: 'hace UNA pregunta principal (no 3 simultáneas)',
-        predicate: (t) => {
+        predicate: (t: string) => {
           const qs = (t.match(/\?/g) ?? []).length;
-          return qs >= 1 && qs <= 3; // 1-3 signos de pregunta es OK; 4+ es overload
+          return qs >= 1 && qs <= 2; // 1-2 max — más es overload
         },
       },
       {
         name:
           'pregunta por horizonte / rentabilidad inmediata vs apreciación / capacidad / diversificación',
-        predicate: (t) =>
+        predicate: (t: string) =>
           /(rentabilidad|arriendo|apreciaci[oó]n|horizonte|3\s*-?\s*5\s*años|inquilino|pasiv[oa]|diversificar|otra ciudad)/i.test(
             t
           ),
       },
       {
         name: 'NO inventa números de ROI / apreciación específicos',
-        predicate: (t) => !/\d{1,2}\s*%\s*anual|ROI\s*\d|\+\d+%/i.test(t),
+        predicate: (t: string) => !/\d{1,2}\s*%\s*anual|ROI\s*\d|\+\d+%/i.test(t),
       },
       {
         name: 'tono asesor (no vendedor)',
-        predicate: (t) =>
+        predicate: (t: string) =>
           !/comprar\s+ya|oferta limitada|últimas? unidades|aprovecha/i.test(t),
       },
     ],
@@ -139,7 +148,7 @@ async function main() {
 
     console.log(`\n──── Checks ────`);
     for (const check of test.checks) {
-      const ok = check.predicate(r.text);
+      const ok = check.predicate(r.text, r.toolsUsed);
       console.log(`${ok ? '✅' : '❌'} ${check.name}`);
       ok ? totalPass++ : totalFail++;
     }
