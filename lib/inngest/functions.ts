@@ -18,9 +18,11 @@ import { scrapeMetroCuadrado } from '../scrapers/metrocuadrado';
 import { scrapeCiencuadras } from '../scrapers/ciencuadras';
 import { scrapeProperati } from '../scrapers/properati';
 
-// Cuántas propiedades procesar por tick. Vercel timeout 300s, fetch ~1s/url.
-// 150 deja margen para el setup + parse + upsert + enrich.
-const TICK_MAX = 150;
+// Cuántas propiedades procesar por tick. Vercel timeout 300s.
+// Cálculo: ~1.5s/url con detail-fetch + enrich → 50 URLs ~= 75s, deja
+// margen amplio para setup + sitemap discovery + upsert batch.
+// Si querés más por tick, subir a 100 con Vercel Pro (timeout 800s).
+const TICK_MAX = 50;
 
 export const scrapeFincaraizTick = inngest.createFunction(
   {
