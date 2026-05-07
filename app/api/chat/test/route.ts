@@ -1,5 +1,5 @@
 // app/api/chat/test/route.ts
-// Endpoint POST para probar el chatbot AI desde el web widget.
+// Endpoint POST para el chatbot AI desde el web widget.
 //
 // Body:
 //   { session_id: string (UUID), message: string, property_id?: string }
@@ -10,10 +10,12 @@
 //     promoted_to_lead, usage, truncated
 //   }
 //
-// Auth: ninguna en MVP — gated por session_id (browser-generated UUID).
-// Cuando expongamos esto en producción, agregar Bearer token o Supabase auth.
+// Auth: REQUERIDA — header Authorization: Bearer <Supabase JWT>. La JWT se
+// valida server-side y el user.id queda ligado a la conversación (FK a
+// auth.users). Sin auth → 401.
 
 import { NextResponse, type NextRequest } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { generateAIResponse } from '@/lib/whatsapp-ai';
 import { getOrCreateWebConversation, checkRateLimit } from '@/lib/ai/conversation';
 
@@ -22,7 +24,27 @@ export const maxDuration = 60; // segundos. Tool loop puede tomar 30-50s en peor
 
 const MAX_MESSAGE_LENGTH = 2000;
 
+async function getAuthenticatedUserId(req: NextRequest): Promise<string | null> {
+  const auth = req.headers.get('authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+  const token = auth.slice('Bearer '.length).trim();
+  if (!token) return null;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) return null;
+  const client = createClient(url, anon);
+  const { data, error } = await client.auth.getUser(token);
+  if (error || !data?.user?.id) return null;
+  return data.user.id;
+}
+
 export async function POST(request: NextRequest) {
+  // Auth gate — sin user_id no hay chat.
+  const userId = await getAuthenticatedUserId(request);
+  if (!userId) {
+    return jsonError('Unauthorized — login required', 401);
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -49,14 +71,17 @@ export async function POST(request: NextRequest) {
     return jsonError(`message excede ${MAX_MESSAGE_LENGTH} caracteres`, 400);
   }
 
-  // Rate limit: 100 mensajes / minuto / session_id.
-  const rl = checkRateLimit(`chat:${session_id}`, 100, 60_000);
+  // Rate limit: 100 mensajes / minuto por user (más estricto que por session).
+  const rl = checkRateLimit(`chat:${userId}`, 100, 60_000);
   if (!rl.allowed) {
     return jsonError('Límite de mensajes alcanzado. Espere un minuto.', 429);
   }
 
   try {
-    const conversation = await getOrCreateWebConversation(session_id, property_id);
+    const conversation = await getOrCreateWebConversation(session_id, {
+      userId,
+      propertyId: property_id,
+    });
     const result = await generateAIResponse(conversation, trimmed);
 
     return NextResponse.json(

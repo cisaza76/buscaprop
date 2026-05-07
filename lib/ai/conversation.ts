@@ -44,6 +44,8 @@ export interface Conversation {
   id: string;
   channel: Channel;
   session_id: string | null;
+  /** FK a auth.users(id). Null = conversación legacy/anónima previa al gate de auth. */
+  user_id: string | null;
   user_phone: string | null;
   property_id: string | null;
   lead_score: number;
@@ -72,25 +74,32 @@ export interface ConversationMessage {
 // ============================================================================
 
 /**
- * Encuentra una conversación existente para esta sesión web, o crea una nueva.
- * Idempotente — múltiples calls con mismo session_id devuelven la misma row.
+ * Encuentra una conversación existente para este usuario/sesión web, o crea
+ * una nueva. Idempotente:
+ * - Si hay userId, lookup primario por user_id (account-bound — sobrevive
+ *   cambios de browser/incógnito mientras el user esté logueado).
+ * - Si no hay userId (anónimo, legacy), fallback a session_id + user_id IS NULL.
+ *   Después del gate de auth, esto solo aplica a conversaciones viejas.
  */
 export async function getOrCreateWebConversation(
   sessionId: string,
-  propertyId?: string
+  opts: { userId?: string | null; propertyId?: string } = {}
 ): Promise<Conversation> {
   const sb = getServerClient();
+  const { userId = null, propertyId } = opts;
 
-  // Lookup por session_id activo.
-  const { data: existing } = await sb
+  let lookup = sb
     .from('conversations')
     .select('*')
     .eq('channel', 'web')
-    .eq('session_id', sessionId)
     .neq('status', 'closed')
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  lookup = userId
+    ? lookup.eq('user_id', userId)
+    : lookup.eq('session_id', sessionId).is('user_id', null);
+
+  const { data: existing } = await lookup.maybeSingle();
 
   if (existing) return normalizeConversation(existing as Record<string, unknown>);
 
@@ -100,6 +109,7 @@ export async function getOrCreateWebConversation(
     .insert({
       channel: 'web',
       session_id: sessionId,
+      user_id: userId,
       property_id: propertyId ?? null,
     })
     .select('*')

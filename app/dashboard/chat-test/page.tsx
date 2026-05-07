@@ -6,17 +6,41 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/shared/Navbar';
 import { ChatWidget } from '@/components/dashboard/ChatWidget';
+import { useAuth } from '@/context/AuthContext';
 
 export default function ChatTestPage() {
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const router = useRouter();
   const [sessionId, setSessionId] = useState('');
+
+  // Auth gate: sin sesión → /login con redirect de vuelta acá.
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.replace('/login?redirect=/dashboard/chat-test');
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setSessionId(localStorage.getItem('buscaprop_chat_session_id') ?? '');
     }
   }, []);
+
+  if (authLoading || !isAuthenticated) {
+    return (
+      <>
+        <Navbar />
+        <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
+          <div className="text-center text-gray-500 py-12">
+            {authLoading ? 'Cargando…' : 'Redirigiendo a login…'}
+          </div>
+        </main>
+      </>
+    );
+  }
 
   return (
     <>

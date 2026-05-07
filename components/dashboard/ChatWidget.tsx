@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/context/AuthContext';
 
 interface ChatWidgetProps {
   /** Si la conversación arranca desde una propiedad específica (opcional). */
@@ -58,6 +59,7 @@ export function ChatWidget({
   sessionIdOverride,
   className,
 }: ChatWidgetProps) {
+  const { session } = useAuth();
   const [sessionId, setSessionId] = useState('');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -94,10 +96,19 @@ export function ChatWidget({
     setIsLoading(true);
     setError(null);
 
+    if (!session?.access_token) {
+      setError('Sesión expirada. Recarga la página e ingresá de nuevo.');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch('/api/chat/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           session_id: sessionId,
           message: trimmed,
