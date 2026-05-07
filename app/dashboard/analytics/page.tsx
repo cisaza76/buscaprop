@@ -1,11 +1,14 @@
 // app/dashboard/analytics/page.tsx
 // Métricas mínimas del bot. Auto-refresh cada 60s (cache TTL del API).
+// Protegida por auth Supabase — redirige a / si no hay session.
 
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { BotAnalytics } from '@/lib/analytics';
 import { Navbar } from '@/components/shared/Navbar';
+import { useAuth } from '@/context/AuthContext';
 
 interface AnalyticsResponse extends BotAnalytics {
   ok: boolean;
@@ -13,15 +16,28 @@ interface AnalyticsResponse extends BotAnalytics {
 }
 
 export default function AnalyticsPage() {
+  const { session, isAuthenticated, isLoading: authLoading } = useAuth();
+  const router = useRouter();
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Redirect si no autenticado (después de cargar el estado de auth).
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.replace('/');
+    }
+  }, [authLoading, isAuthenticated, router]);
+
   const fetchData = async () => {
+    if (!session?.access_token) return;
     try {
-      const res = await fetch('/api/analytics', { cache: 'no-store' });
+      const res = await fetch('/api/analytics', {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
       const json = await res.json();
-      if (!json.ok) throw new Error(json.error ?? 'Error');
+      if (!res.ok || !json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       setData(json);
       setError(null);
     } catch (err) {
@@ -32,17 +48,30 @@ export default function AnalyticsPage() {
   };
 
   useEffect(() => {
+    if (!isAuthenticated || !session?.access_token) return;
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => clearInterval(id);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, session?.access_token]);
 
-  if (loading) {
+  if (authLoading || (loading && isAuthenticated)) {
     return (
       <>
         <Navbar />
         <main className="max-w-6xl mx-auto px-4 py-8">
           <div className="text-center text-gray-500">Cargando métricas...</div>
+        </main>
+      </>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <Navbar />
+        <main className="max-w-6xl mx-auto px-4 py-8">
+          <div className="text-center text-gray-500">Redirigiendo...</div>
         </main>
       </>
     );

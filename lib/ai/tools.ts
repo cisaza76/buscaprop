@@ -170,9 +170,11 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: 'requestContact',
     description:
-      'El usuario te dio su teléfono (10 dígitos colombianos) y quiere que un agente humano lo ' +
-      'contacte. Esta tool dispara la creación del lead — un asesor humano va a tomar la conversación. ' +
-      'Llamala SÓLO cuando el user efectivamente compartió su número (no cuando dijo "después te lo paso").',
+      'El usuario te dio su teléfono (10 dígitos colombianos) y quiere que lo contactemos. ' +
+      'Esta tool registra la información para que el equipo de BuscaProp le haga seguimiento. ' +
+      'Llámala SÓLO cuando el user efectivamente compartió su número (no cuando dijo "después te lo paso"). ' +
+      'IMPORTANTE: NO prometas tiempo específico de contacto al cliente. Di "su información quedó ' +
+      'guardada y le contactaremos en cuanto tengamos un asesor disponible".',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -452,7 +454,8 @@ export const TOOLS: Anthropic.Tool[] = [
     name: 'scheduleVisit',
     description:
       'Registra que el usuario quiere agendar una visita a una propiedad. NO confirma la visita — ' +
-      'solo marca la intención y avisa al usuario que un agente humano lo contactará para coordinar. ' +
+      'solo marca la intención. Avísale al usuario que su solicitud quedó registrada y que el ' +
+      'equipo le contactará en cuanto haya un asesor disponible — sin prometer tiempo específico. ' +
       'Úsalo cuando el usuario diga "quiero visitar", "puedo verla", "agendar", etc.',
     input_schema: {
       type: 'object' as const,
@@ -743,8 +746,10 @@ async function runRequestContact(
       preferred_time: preferredTime,
       preferred_method: preferredMethod,
       next_step:
-        'Un agente humano va a contactar al usuario. El motor de scoring va a ' +
-        'promover esta conversación a lead automáticamente.',
+        'Información del cliente registrada en sistema. NO prometas tiempo de ' +
+        'contacto — di "su información quedó guardada y le contactaremos en cuanto ' +
+        'tengamos un asesor disponible". El equipo de BuscaProp aún está en ' +
+        'capacitación y los handoffs no son inmediatos.',
     }),
     isError: false,
     contactRecorded: true,
@@ -981,6 +986,9 @@ function runScheduleVisit(input: Record<string, unknown>): string {
     property_id: propertyId,
     preferred_when: when,
     contact_method: method,
-    next_step: 'Un agente humano contactará al usuario para coordinar día/hora exactos.',
+    next_step:
+      'Intención de visita registrada. NO prometas tiempo de contacto exacto — di ' +
+      '"su solicitud quedó registrada y coordinaremos visita en cuanto tengamos ' +
+      'un asesor disponible". El handoff humano todavía no es inmediato.',
   });
 }
