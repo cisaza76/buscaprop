@@ -83,6 +83,20 @@ const ALTERNATIVE_ZONES_BOGOTA: Record<string, string[]> = {
   // ── Modelia / occidente ──
   modelia: ['Hayuelos', 'El Tintal', 'Castilla'],
   hayuelos: ['Modelia', 'El Tintal', 'Castilla'],
+
+  // ── Castellana / Barrios Unidos (estrato 4-5) ──
+  // La Castellana es zona transicional norte-céntrica, perfil residencial.
+  'la castellana': ['Polo Club', 'Los Andes', 'Alcázares', 'Rionegro', 'Santa Sofía'],
+  castellana: ['Polo Club', 'Los Andes', 'Alcázares', 'Rionegro', 'Santa Sofía'],
+  'polo club': ['La Castellana', 'Los Andes', 'Rionegro'],
+  'los andes': ['La Castellana', 'Polo Club', 'Alcázares'],
+  alcazares: ['La Castellana', 'Polo Club', 'Rionegro'],
+  alcázares: ['La Castellana', 'Polo Club', 'Rionegro'],
+
+  // ── Otros barrios residenciales centro-norte ──
+  galerias: ['Teusaquillo', 'La Soledad', 'Pablo VI'],
+  galerías: ['Teusaquillo', 'La Soledad', 'Pablo VI'],
+  'pablo vi': ['Salitre', 'Galerías', 'Teusaquillo'],
 };
 
 const ALTERNATIVE_ZONES_MEDELLIN: Record<string, string[]> = {

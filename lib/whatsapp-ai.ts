@@ -153,7 +153,13 @@ export async function generateAIResponse(
         messages.push({
           role: 'user',
           content:
-            'Por favor, da una respuesta completa y útil al usuario en este momento (4-8 líneas). NUNCA cierres un turno sin texto al usuario. Si llamaste tools, usa esa información para responder concretamente. Si necesitas más info del cliente, termina con UNA pregunta usando signo de interrogación ("¿...?"). Genera la respuesta ahora.',
+            'Genera ahora una respuesta de texto al usuario (4-8 líneas). REQUISITOS DUROS:\n' +
+            '1) Frases COMPLETAS con sujeto + verbo + complemento. NO frases sueltas tipo "Con eso búsqueda..." o "Listo, sigamos."\n' +
+            '2) Si solo actualizaste preferencias del cliente, confirma brevemente (1 línea) y haz UNA pregunta concreta para avanzar.\n' +
+            '3) Si tienes resultados de tools, MUÉSTRALOS con A/B/C de propiedades concretas. NO digas "podemos buscar en X" sin mostrar.\n' +
+            '4) Mantén USTED bogotano profesional ("le", "su", "usted"), nunca tutees aunque el cliente tutee.\n' +
+            '5) Termina con UNA pregunta accionable (signo "?").\n' +
+            'Genera la respuesta ahora.',
         });
         validateMessages(messages);
         continue;
