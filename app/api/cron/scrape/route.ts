@@ -1,7 +1,7 @@
 // app/api/cron/scrape/route.ts
 // Endpoint que dispara los scrapers. Pensado para ser llamado por:
 //   - GitHub Actions workflow (cron cada 1h por portal, gratis y sin timeout)
-//   - Vercel Cron (Pro: maxDuration 800s — alcanza para 1 portal por invocación)
+//   - Vercel Cron (Pro: maxDuration 300s — alcanza para 1 portal por invocación)
 //
 // Protegido con Bearer token: el llamador debe enviar
 //   Authorization: Bearer <CRON_SECRET>
