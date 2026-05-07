@@ -279,7 +279,15 @@ export async function generateAIResponse(
 
   const wasQualified = isQualifiedLead(conversation.lead_score);
   const isNowQualified = isQualifiedLead(breakdown.total);
-  const promotedToLead = !wasQualified && isNowQualified;
+  const hasPhone = contactRecorded || phoneOnRecord;
+  // Lead = qualified + tiene teléfono. Sin teléfono no es accionable y mandar
+  // email "Contacto: —" al equipo es ruido. La conversación igual queda con
+  // status='qualified' (para analytics), pero no se promueve a la tabla leads.
+  const isPromotable = isNowQualified && hasPhone;
+  // wasPromotable = ya estaba en estado promote-able antes de ESTE turn.
+  // Si phone se acaba de capturar (contactRecorded=true), antes no había phone.
+  const wasPromotable = wasQualified && phoneOnRecord && !contactRecorded;
+  const promotedToLead = isPromotable && !wasPromotable;
 
   await updateLeadScore(
     conversation.id,
@@ -288,12 +296,15 @@ export async function generateAIResponse(
   );
 
   if (promotedToLead) {
+    // Resumen útil = primer mensaje del cliente (su intent original).
+    // El último texto del bot suele ser la próxima pregunta, no un resumen.
+    const firstUserMsg = allMessages.find((m) => m.role === 'user')?.content?.trim() ?? '';
     await promoteToLead({
       conversationId: conversation.id,
       leadScore: breakdown.total,
       propertyId: conversation.property_id ?? undefined,
       agencyId: conversation.agency_id ?? undefined,
-      summary: finalText.slice(0, 200),
+      summary: firstUserMsg ? firstUserMsg.slice(0, 200) : undefined,
     });
   }
 
