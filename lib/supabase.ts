@@ -251,8 +251,13 @@ export async function searchProperties(filters: {
   }
   if (filters.listing_type) query = query.eq('listing_type', filters.listing_type);
   if (filters.property_type) query = query.eq('property_type', filters.property_type);
-  if (filters.min_price) query = query.gte('price_cop', filters.min_price);
-  if (filters.max_price) query = query.lte('price_cop', filters.max_price);
+  // CRÍTICO: price_cop es bigint en Postgres — NO acepta decimales. Cuando
+  // el caller pasa X*0.85 o X*1.15 (ej. 14_000_000 * 1.15 = 16_099_999.99...),
+  // la query falla silenciosamente con "invalid input syntax for type bigint".
+  // Math.floor/ceil garantiza enteros y conserva la semántica del rango
+  // (floor del min para no excluir borderlines, ceil del max para incluirlos).
+  if (filters.min_price) query = query.gte('price_cop', Math.floor(filters.min_price));
+  if (filters.max_price) query = query.lte('price_cop', Math.ceil(filters.max_price));
   if (filters.min_bedrooms) query = query.gte('bedrooms', filters.min_bedrooms);
   if (filters.max_bedrooms) query = query.lte('bedrooms', filters.max_bedrooms);
   if (filters.min_area) query = query.gte('area_m2', filters.min_area);
