@@ -1,29 +1,33 @@
-name: Scrape portales (cada 6h)
+name: Scrape portales (cada 6h, 4 jobs paralelos)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Por qué corremos los scrapers en el runner y NO vía webhook a Vercel:
+# 4 jobs paralelos, uno por portal. Mucho más rápido que serie:
+#   - Wall clock: ~40 min (vs ~150 min en serie con maxListings=1500)
+#   - Compute total: ~160 min (4 × 40 min) — cabe holgado en GH Actions free
+#     para repos públicos. Para repos privados free tier es 2000 min/mes
+#     → ~12 runs/mes con esta config (1 cada 2.5 días).
 #
-# Los scrapers actuales tardan entre 7 min (Properati search-only) y 100 min
-# (Ciencuadras --max 1000 con detail-fetch). Vercel Functions tiene límite
-# de 300s (5 min) en plan Pro y 60s en Hobby. Un webhook /api/cron/scrape
-# saturaría esos timeouts antes de terminar siquiera un solo portal.
+# Trigger:
+#   - Schedule: cada 6h (4 runs/día = 16 runs/día compute = ~2400 min/día — solo OK
+#     para repos públicos o GH Pro). Para free tier privado bajar a "0 0,12 * * *".
+#   - Manual via UI: workflow_dispatch (control fino de portal/op/max)
 #
-# GitHub Actions (free tier) permite jobs hasta 6 horas — espacio de sobra.
-# Además, los logs y reintentos quedan visibles en la pestaña Actions.
+# Por qué corremos en runner (no webhook a Vercel):
+#   Los scrapers tardan 25-40 min con maxListings=1500. Vercel Hobby tiene
+#   timeout 300s y Pro 800s — no caben. GitHub Actions runners no tienen
+#   ese límite (timeout-minutes: 180 = 3h).
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    # Cada 6 horas en punto. Hora UTC. Para Colombia (UTC-5):
-    # 00:00 UTC → 19:00 día anterior  ·  06:00 UTC → 01:00
-    # 12:00 UTC → 07:00                  18:00 UTC → 13:00
+    # Cada 6h en UTC. Para Colombia (UTC-5):
+    # 00 UTC → 19h CO  ·  06 UTC → 01h CO  ·  12 UTC → 07h CO  ·  18 UTC → 13h CO
     - cron: '0 */6 * * *'
 
-  # Permite trigger manual desde GitHub UI o `gh workflow run scrape-cron.yml`.
   workflow_dispatch:
     inputs:
       portal:
-        description: 'Portal específico (vacío = todos)'
+        description: 'Portal específico (vacío = todos en paralelo)'
         required: false
         type: choice
         default: ''
@@ -34,7 +38,7 @@ on:
           - properati
           - ciencuadras
       op:
-        description: 'Operación específica (vacío = ambas)'
+        description: 'Operación (vacío = venta+arriendo)'
         required: false
         type: choice
         default: ''
@@ -46,59 +50,79 @@ on:
         description: 'Máx propiedades por portal'
         required: false
         type: string
-        default: '200'
+        default: '1500'
 
-# Cancelar runs anteriores si llega uno nuevo del schedule (evita acumular).
+# Si llega un schedule mientras corre uno, encolar (no cancelar).
 concurrency:
-  group: scrape-cron
-  cancel-in-progress: false # NO matar uno en progreso; solo encolar el siguiente
+  group: scrape-cron-${{ github.event_name }}
+  cancel-in-progress: false
 
 jobs:
   scrape:
+    name: scrape-${{ matrix.portal }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180 # 3h max — Ciencuadras es el más lento
+    timeout-minutes: 90 # Cada portal tarda 25-50 min con maxListings=1500. Margen 2x.
+
+    strategy:
+      # Fail-fast false: si un portal falla, los demás siguen.
+      fail-fast: false
+      matrix:
+        # Si workflow_dispatch pasó portal específico, solo ese.
+        # Sino los 4 en paralelo. La condicional se evalúa por step abajo.
+        portal:
+          - fincaraiz
+          - metrocuadrado
+          - properati
+          - ciencuadras
 
     steps:
+      - name: Skip if specific portal requested and not this one
+        id: skip-check
+        run: |
+          REQUESTED="${{ inputs.portal || '' }}"
+          if [ -n "$REQUESTED" ] && [ "$REQUESTED" != "${{ matrix.portal }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping ${{ matrix.portal }} (requested: $REQUESTED)"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout
+        if: steps.skip-check.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       - name: Setup Node
+        if: steps.skip-check.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.skip-check.outputs.skip != 'true'
         run: npm ci
 
-      - name: Run scrapers
+      - name: Run scraper for ${{ matrix.portal }}
+        if: steps.skip-check.outputs.skip != 'true'
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
-          ARGS=()
-
-          # Default scheduled run: --max 200 (sin filtros) ≈ 30 min total.
-          # workflow_dispatch puede pasar inputs.{portal,op,max}.
-          MAX="${{ inputs.max || '200' }}"
-          PORTAL="${{ inputs.portal || '' }}"
+          MAX="${{ inputs.max || '1500' }}"
           OP="${{ inputs.op || '' }}"
-
-          ARGS+=(--max "$MAX")
-          if [ -n "$PORTAL" ]; then ARGS+=(--portal "$PORTAL"); fi
-          if [ -n "$OP" ];     then ARGS+=(--op "$OP");         fi
-
+          ARGS=(--portal "${{ matrix.portal }}" --max "$MAX")
+          if [ -n "$OP" ]; then ARGS+=(--op "$OP"); fi
           echo "▶ npx tsx scripts/scrape-once.ts ${ARGS[*]}"
           npx tsx scripts/scrape-once.ts "${ARGS[@]}"
 
       - name: Summary
-        if: always()
+        if: always() && steps.skip-check.outputs.skip != 'true'
         run: |
-          echo "### Scrape completado · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "### Scrape ${{ matrix.portal }} · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Status: \`${{ job.status }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Trigger: \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "Portal: \`${{ inputs.portal || 'todos' }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Op: \`${{ inputs.op || 'venta+arriendo' }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "Max: \`${{ inputs.max || '200' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Max: \`${{ inputs.max || '1500' }}\`" >> $GITHUB_STEP_SUMMARY

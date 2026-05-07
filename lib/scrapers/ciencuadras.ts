@@ -64,6 +64,8 @@ export interface CiencuadrasOptions {
   /** Slugs de ciudades (sin tildes) que usa Ciencuadras en sitemap. */
   cities?: string[];
   listingTypes?: Array<'venta' | 'arriendo'>;
+  /** Cursor incremental — url_idx global en la queue round-robin. */
+  cursor?: { url_idx?: number };
 }
 
 // ============================================================================
@@ -140,11 +142,18 @@ export async function scrapeCiencuadras(
   const queue: string[] = roundRobinFlatten(urlsByCombo);
   result.discovered = queue.length;
 
-  // 5. Detail-fetch + parse hasta llenar maxListings.
+  // 5. Detail-fetch + parse hasta llenar maxListings (cursor-aware).
   const items: ScrapedProperty[] = [];
   const seen = new Set<string>();
-  for (const url of queue) {
-    if (items.length >= maxListings) break;
+  const startIdx = opts.cursor?.url_idx ?? 0;
+  let nextIdx = startIdx;
+  for (let i = startIdx; i < queue.length; i++) {
+    const url = queue[i];
+    if (items.length >= maxListings) {
+      nextIdx = i;
+      break;
+    }
+    nextIdx = i + 1;
     if (seen.has(url)) continue;
     seen.add(url);
 
@@ -174,6 +183,10 @@ export async function scrapeCiencuadras(
       });
     }
   }
+
+  // Cursor: si terminamos toda la queue, reset a 0 (re-escaneo refresca).
+  if (nextIdx >= queue.length) nextIdx = 0;
+  result.nextCursor = { last_url_idx: nextIdx };
 
   if (items.length > 0) {
     try {

@@ -71,6 +71,8 @@ export interface ProperatiOptions {
    * Default true. Pasar false en tests / debugging local.
    */
   enrichWithDetail?: boolean;
+  /** Cursor incremental — combo_idx en el array de combos. */
+  cursor?: { combo_idx?: number };
 }
 
 // ============================================================================
@@ -114,9 +116,17 @@ export async function scrapeProperati(
   const items: ScrapedProperty[] = [];
   const seenUrls = new Set<string>();
 
-  outer: for (const combo of combos) {
+  const startComboIdx = opts.cursor?.combo_idx ?? 0;
+  let nextComboIdx = startComboIdx;
+
+  outer: for (let cIdx = startComboIdx; cIdx < combos.length; cIdx++) {
+    const combo = combos[cIdx];
+    nextComboIdx = cIdx + 1;
     for (let page = 1; page <= maxPagesPerCombo; page++) {
-      if (items.length >= maxListings) break outer;
+      if (items.length >= maxListings) {
+        nextComboIdx = cIdx; // mantenemos en el mismo combo si no terminamos páginas
+        break outer;
+      }
 
       const url = page === 1
         ? `${PROPERATI_BASE}/s/${combo.location}/${combo.type}/${combo.op}`
@@ -158,6 +168,10 @@ export async function scrapeProperati(
       if (addedThisPage === 0) break;
     }
   }
+
+  // Cursor: si terminamos todos los combos sin llenar maxListings, reset.
+  if (nextComboIdx >= combos.length) nextComboIdx = 0;
+  result.nextCursor = { last_combo_idx: nextComboIdx };
 
   // Enriquecer con detail-fetch para extraer coords (no están en search).
   // Default true desde Phase 10 — sin coords no podemos enriquecer con IDECA.

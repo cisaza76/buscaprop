@@ -81,6 +81,8 @@ export interface FincaraizOptions {
   departments?: string[];
   propertyTypes?: Array<'apartamento' | 'casa' | 'apartaestudio' | 'oficina' | 'lote'>;
   listingTypes?: Array<'venta' | 'alquiler'>;
+  /** Cursor de scraping incremental — para reanudar desde última posición. */
+  cursor?: { sitemap_idx?: number; url_idx?: number };
 }
 
 export async function scrapeFincaraiz(
@@ -135,12 +137,20 @@ export async function scrapeFincaraiz(
     return finalize(result, t0);
   }
 
-  // 2. Recolectar listing URLs hasta tener buffer 2× para tolerar parses fallidos.
-  const listingUrls: string[] = [];
+  // 2. Cursor-aware iteration: empezar desde {sitemap_idx, url_idx} guardado.
+  // Cargar cada child sitemap on-demand (no todos a la vez) — para Inngest
+  // que procesa chunks pequeños.
+  const startSitemapIdx = opts.cursor?.sitemap_idx ?? 0;
+  let startUrlIdx = opts.cursor?.url_idx ?? 0;
+
+  const items: ScrapedProperty[] = [];
   const seen = new Set<string>();
-  const targetBuffer = maxListings * 2;
-  for (const sitemapUrl of childSitemaps) {
-    if (listingUrls.length >= targetBuffer) break;
+  let nextSitemapIdx = startSitemapIdx;
+  let nextUrlIdx = startUrlIdx;
+  let completedFullCycle = false;
+
+  outer: for (let sIdx = startSitemapIdx; sIdx < childSitemaps.length; sIdx++) {
+    const sitemapUrl = childSitemaps[sIdx];
     let urls: string[];
     try {
       urls = await collectListingUrls(sitemapUrl);
@@ -150,49 +160,65 @@ export async function scrapeFincaraiz(
         stage: 'discovery',
         message: err instanceof Error ? err.message : String(err),
       });
+      // Skip al siguiente sitemap.
+      nextSitemapIdx = sIdx + 1;
+      nextUrlIdx = 0;
+      startUrlIdx = 0;
       continue;
     }
-    for (const u of urls) {
-      if (seen.has(u)) continue;
-      seen.add(u);
-      listingUrls.push(u);
-      if (listingUrls.length >= targetBuffer) break;
-    }
-  }
-  result.discovered = listingUrls.length;
+    result.discovered += urls.length;
 
-  // 3. Fetch + parse hasta llenar maxListings de items válidos.
-  const items: ScrapedProperty[] = [];
-  for (const url of listingUrls) {
-    if (items.length >= maxListings) break;
-    let html: string;
-    try {
-      html = await fetchText(url);
-      result.fetched++;
-    } catch (err) {
-      result.errors.push({
-        url,
-        stage: 'fetch',
-        message: err instanceof Error ? err.message : String(err),
-      });
-      continue;
-    }
-    try {
-      const item = parseFincaraizListing(url, html);
-      if (item) {
-        items.push(item);
-        result.parsed++;
+    for (let uIdx = startUrlIdx; uIdx < urls.length; uIdx++) {
+      if (items.length >= maxListings) {
+        nextSitemapIdx = sIdx;
+        nextUrlIdx = uIdx;
+        break outer;
       }
-    } catch (err) {
-      result.errors.push({
-        url,
-        stage: 'parse',
-        message: err instanceof Error ? err.message : String(err),
-      });
+      const url = urls[uIdx];
+      if (seen.has(url)) continue;
+      seen.add(url);
+
+      let html: string;
+      try {
+        html = await fetchText(url);
+        result.fetched++;
+      } catch (err) {
+        result.errors.push({
+          url,
+          stage: 'fetch',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      try {
+        const item = parseFincaraizListing(url, html);
+        if (item) {
+          items.push(item);
+          result.parsed++;
+        }
+      } catch (err) {
+        result.errors.push({
+          url,
+          stage: 'parse',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
+    // Terminamos este sitemap, avanzar al siguiente reseteando url_idx.
+    nextSitemapIdx = sIdx + 1;
+    nextUrlIdx = 0;
+    startUrlIdx = 0;
   }
 
-  // 4. Upsert idempotente.
+  // Si recorrimos todos los sitemaps sin llenar maxListings, completamos ciclo.
+  // El cursor vuelve a {0, 0} para reiniciar (refresca data ya capturada).
+  if (nextSitemapIdx >= childSitemaps.length) {
+    nextSitemapIdx = 0;
+    nextUrlIdx = 0;
+    completedFullCycle = true;
+  }
+
+  // 3. Upsert idempotente.
   if (items.length > 0) {
     try {
       const r = await upsertBatch(items);
@@ -208,6 +234,19 @@ export async function scrapeFincaraiz(
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  result.nextCursor = {
+    last_sitemap_idx: nextSitemapIdx,
+    last_url_idx: nextUrlIdx,
+  };
+  if (completedFullCycle) {
+    // Marcamos en el message para que el caller lo registre.
+    result.errors.push({
+      url: '<cursor>',
+      stage: 'discovery',
+      message: 'INFO: completed full cycle, cursor reset to (0, 0)',
+    });
   }
 
   return finalize(result, t0);

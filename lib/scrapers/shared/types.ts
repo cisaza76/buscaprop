@@ -46,6 +46,18 @@ export interface ScrapeResult {
   upserted: number; // filas insertadas o actualizadas
   duplicates: number; // marcadas is_duplicate=true contra otro portal
   errors: ScrapeError[];
+  /** Posición next del cursor (chunked scraping). 0 = completó full ciclo. */
+  nextCursor?: ScraperCursorState;
+}
+
+// Estado del cursor de scraping incremental por portal.
+// - sitemap-based (Fincaraíz, Ciencuadras): {sitemap_idx, url_idx}
+// - combo-based (MetroCuadrado): {combo_idx}
+// - search-based (Properati): {sitemap_idx} usado como page offset
+export interface ScraperCursorState {
+  last_sitemap_idx?: number;
+  last_url_idx?: number;
+  last_combo_idx?: number;
 }
 
 export interface ScrapeError {

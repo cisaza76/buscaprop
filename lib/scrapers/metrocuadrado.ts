@@ -96,6 +96,8 @@ export interface MetroCuadradoOptions {
    * Pasar false explícitamente solo en tests / debugging local.
    */
   enrichWithDetail?: boolean;
+  /** Cursor incremental — para reanudar desde último combo procesado. */
+  cursor?: { combo_idx?: number };
 }
 
 // ============================================================================
@@ -152,8 +154,18 @@ export async function scrapeMetroCuadrado(
   const items: ScrapedProperty[] = [];
   const seenIds = new Set<string>();
 
-  for (const combo of combos) {
-    if (items.length >= maxListings) break;
+  // Cursor: empezar desde el combo guardado.
+  const startComboIdx = opts.cursor?.combo_idx ?? 0;
+  let nextComboIdx = startComboIdx;
+
+  for (let i = startComboIdx; i < combos.length; i++) {
+    const combo = combos[i];
+    if (items.length >= maxListings) {
+      nextComboIdx = i;
+      break;
+    }
+    // Si terminamos de iterar sin parar, dejamos nextComboIdx en el siguiente.
+    nextComboIdx = i + 1;
 
     // URL con barrio si aplica: /apartamento/arriendo/bogota/rosales/
     const url = combo.barrio
@@ -214,6 +226,12 @@ export async function scrapeMetroCuadrado(
       }
     }
   }
+
+  // Si recorrimos todos los combos sin llenar maxListings: cursor a 0 (refresca).
+  if (nextComboIdx >= combos.length) {
+    nextComboIdx = 0;
+  }
+  result.nextCursor = { last_combo_idx: nextComboIdx };
 
   // Enriquecer con detail-fetch. Default true desde Phase 10 — sin esto
   // las coords no se extraen y bloquea el pipeline de enrichment con IDECA.
