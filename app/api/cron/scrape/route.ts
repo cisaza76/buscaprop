@@ -20,7 +20,7 @@ import { runAllScrapers } from '@/lib/scrapers/runner';
 import type { SourcePortal } from '@/lib/scrapers/shared/types';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800; // Vercel Pro max
+export const maxDuration = 300; // Vercel Pro max
 
 const VALID_PORTALS: SourcePortal[] = [
   'fincaraiz',
