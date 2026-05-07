@@ -19,10 +19,10 @@ import { scrapeCiencuadras } from '../scrapers/ciencuadras';
 import { scrapeProperati } from '../scrapers/properati';
 
 // Cuántas propiedades procesar por tick. Vercel timeout 300s.
-// Cálculo: ~1.5s/url con detail-fetch + enrich → 50 URLs ~= 75s, deja
-// margen amplio para setup + sitemap discovery + upsert batch.
-// Si querés más por tick, subir a 100 con Vercel Pro (timeout 800s).
-const TICK_MAX = 50;
+// Observado en producción: 50 URLs ≈ 198s (~70% del timeout). Bajamos a 35
+// para tener margen de seguridad contra fluctuaciones de red/parser.
+// Si subimos a Vercel Pro (800s), TICK_MAX puede ir a 150-200.
+const TICK_MAX = 35;
 
 export const scrapeFincaraizTick = inngest.createFunction(
   {
