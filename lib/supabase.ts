@@ -4,12 +4,28 @@ import type { User, Session } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Faltan variables de entorno de Supabase');
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+/**
+ * Cliente con service_role key — bypassea RLS. Usar SOLO en código server-side
+ * (Inngest workers, scripts, API routes que requieran tablas internas como
+ * scraper_cursor). NUNCA exponer al frontend.
+ *
+ * Si SUPABASE_SERVICE_ROLE_KEY no está definida, fallback al anon client
+ * (permite que el código corra en local sin la key, aunque algunas operaciones
+ * fallen por RLS).
+ */
+export const supabaseAdmin = supabaseServiceRoleKey
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+  : supabase;
 
 // ============================================================================
 // TIPOS

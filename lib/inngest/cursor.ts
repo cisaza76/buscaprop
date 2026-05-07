@@ -1,7 +1,7 @@
 // lib/inngest/cursor.ts
 // CRUD del scraper_cursor en Supabase.
 
-import { supabase } from '../supabase';
+import { supabaseAdmin } from '../supabase';
 import type { SourcePortal } from '../scrapers/shared/types';
 
 export interface ScraperCursor {
@@ -20,7 +20,7 @@ export interface ScraperCursor {
  * Lee cursor del portal. Si no existe (no debería, hay seed), devuelve cursor inicial.
  */
 export async function getCursor(portal: SourcePortal): Promise<ScraperCursor> {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('scraper_cursor')
     .select('*')
     .eq('portal', portal)
@@ -52,7 +52,7 @@ export async function updateCursor(
   portal: SourcePortal,
   patch: Partial<Omit<ScraperCursor, 'portal'>>
 ): Promise<void> {
-  const { error } = await supabase.from('scraper_cursor').update(patch).eq('portal', portal);
+  const { error } = await supabaseAdmin.from('scraper_cursor').update(patch).eq('portal', portal);
   if (error) throw new Error(`updateCursor(${portal}): ${error.message}`);
 }
 

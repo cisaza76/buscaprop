@@ -57,3 +57,23 @@ comment on column public.scraper_cursor.last_url_idx is
   'Posición dentro del child sitemap actual (offset de URLs ya procesadas).';
 comment on column public.scraper_cursor.last_combo_idx is
   'Índice del último combo {city,type,op,barrio} procesado (MetroCuadrado).';
+
+-- RLS: la tabla es interna (solo se modifica desde backend con service_role).
+-- Habilitar RLS y agregar policy permisiva para service_role.
+alter table public.scraper_cursor enable row level security;
+
+-- Policy: service_role tiene full access (Inngest workers usan service_role).
+drop policy if exists "service_role full access" on public.scraper_cursor;
+create policy "service_role full access" on public.scraper_cursor
+  for all
+  to service_role
+  using (true)
+  with check (true);
+
+-- Re-sembrar las 4 filas (sin RLS bloqueando ahora).
+insert into public.scraper_cursor (portal) values
+  ('fincaraiz'),
+  ('metrocuadrado'),
+  ('ciencuadras'),
+  ('properati')
+on conflict (portal) do nothing;
