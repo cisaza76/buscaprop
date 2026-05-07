@@ -1,10 +1,15 @@
 // app/dashboard/analytics/page.tsx
 // Métricas mínimas del bot. Auto-refresh cada 60s (cache TTL del API).
-// Protegida por auth Supabase — redirige a / si no hay session.
+// Auth en 2 capas:
+//   1. Supabase session — sin sesión redirige a /login.
+//   2. Email del user ∈ ADMIN_EMAILS (validado server-side por /api/analytics).
+//      Si el API devuelve 403, mostramos UI "acceso restringido" con link al
+//      dashboard normal y paramos el auto-refresh.
 
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { BotAnalytics } from '@/lib/analytics';
 import { Navbar } from '@/components/shared/Navbar';
@@ -20,12 +25,13 @@ export default function AnalyticsPage() {
   const router = useRouter();
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Redirect si no autenticado (después de cargar el estado de auth).
+  // Redirect a /login si no autenticado (después de cargar el estado de auth).
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
-      router.replace('/');
+      router.replace('/login');
     }
   }, [authLoading, isAuthenticated, router]);
 
@@ -36,10 +42,18 @@ export default function AnalyticsPage() {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
+      // 403 = autenticado pero no admin. No es un error de UX, es un estado
+      // esperado para usuarios no-admin que llegaron a la URL.
+      if (res.status === 403) {
+        setForbidden(true);
+        setError(null);
+        return;
+      }
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       setData(json);
       setError(null);
+      setForbidden(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -48,12 +62,12 @@ export default function AnalyticsPage() {
   };
 
   useEffect(() => {
-    if (!isAuthenticated || !session?.access_token) return;
+    if (!isAuthenticated || !session?.access_token || forbidden) return;
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, session?.access_token]);
+  }, [isAuthenticated, session?.access_token, forbidden]);
 
   if (authLoading || (loading && isAuthenticated)) {
     return (
@@ -72,6 +86,30 @@ export default function AnalyticsPage() {
         <Navbar />
         <main className="max-w-6xl mx-auto px-4 py-8">
           <div className="text-center text-gray-500">Redirigiendo...</div>
+        </main>
+      </>
+    );
+  }
+
+  if (forbidden) {
+    return (
+      <>
+        <Navbar />
+        <main className="max-w-6xl mx-auto px-4 py-8">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 max-w-lg mx-auto text-center">
+            <p className="text-3xl mb-2" aria-hidden="true">🔒</p>
+            <h2 className="text-xl font-semibold text-amber-900">403 — Acceso restringido</h2>
+            <p className="text-sm text-amber-800 mt-2">
+              La página de analytics es solo para administradores. Si crees que
+              deberías tener acceso, pídelo al admin del proyecto.
+            </p>
+            <Link
+              href="/dashboard"
+              className="inline-block mt-4 px-4 py-2 bg-amber-600 text-white rounded-md text-sm font-medium hover:bg-amber-700"
+            >
+              Ir al dashboard
+            </Link>
+          </div>
         </main>
       </>
     );
