@@ -49,6 +49,12 @@ export function Navbar() {
                 <Link href="/saved-searches" className={linkClass('/saved-searches')}>
                   Búsquedas guardadas
                 </Link>
+                <Link href="/dashboard/chat-test" className={linkClass('/dashboard/chat-test')}>
+                  Chat
+                </Link>
+                <Link href="/dashboard/analytics" className={linkClass('/dashboard/analytics')}>
+                  Analytics
+                </Link>
                 {isOwner && (
                   <Link href="/agency-settings" className={linkClass('/agency-settings')}>
                     Configuración
