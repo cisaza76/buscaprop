@@ -128,6 +128,67 @@ async function main() {
     { issue: 'Alias twins (Cartagena, etc.)', rows_affected: affectedByAlias },
     { issue: 'Cities en lowercase puro', rows_affected: affectedByLowercase },
   ]);
+
+  // === 6. Post-cleanup expectations (verificación específica) ===
+  // Estos son los valores que DEBEN cumplirse después de aplicar la migración
+  // 015. Si alguno no pasa, hay un fix incompleto.
+  console.log('\n=== Verificación post-cleanup (esperados específicos) ===');
+  const expected = [
+    { city: 'Bogotá',       expect: 5886, tolerance: 50 },
+    { city: 'Medellín',     expect: 4744, tolerance: 50 },
+    { city: 'Cali',         expect: 2411, tolerance: 50 },
+    { city: 'Barranquilla', expect: 2035, tolerance: 50 },
+    { city: 'Cartagena',    expect: 1738, tolerance: 5 }, // ex-955 + ex-783
+  ];
+  const checks = expected.map(({ city, expect, tolerance }) => {
+    const actual = cityExact.get(city) ?? 0;
+    const delta = actual - expect;
+    const pass = Math.abs(delta) <= tolerance;
+    return { city, expected: expect, actual, delta, pass: pass ? '✓' : '✗ FAIL' };
+  });
+  console.table(checks);
+
+  // === 7. Filas con city NULL/vacío (bug residual o data legacy) ===
+  const nullCount = cityExact.get('(null)') ?? 0;
+  const emptyCount = cityExact.get('') ?? 0;
+  console.log(`\nFilas con city NULL: ${nullCount}`);
+  console.log(`Filas con city = '' (vacío): ${emptyCount}`);
+
+  // === 8. Bug residual: ¿queda alguna lowercase de Antioquia? ===
+  // Test específico: si city='envigado' (lowercase) sobrevivió, hay un
+  // codepath que no pasa por canonicalCity().
+  const ANTIOQUIA_LOWERCASE = [
+    'envigado', 'rionegro', 'sabaneta', 'retiro', 'bello', 'ceja',
+    'itagui', 'guarne', 'estrella', 'copacabana', 'marinilla',
+    'girardota', 'amaga', 'caldas', 'barbosa', 'carepa', 'apartado',
+    'vicente', 'jeronimo', 'miguel', 'antioquia', 'viboral',
+    'jamundi', 'palmira', 'turbo',
+  ];
+  const residualLower = ANTIOQUIA_LOWERCASE
+    .map((k) => ({ city: k, n: cityExact.get(k) ?? 0 }))
+    .filter((r) => r.n > 0);
+  console.log('\n=== Bug residual: lowercase municipios sobrevivientes ===');
+  if (residualLower.length === 0) {
+    console.log('✓ ninguno (cleanup OK)');
+  } else {
+    console.log('✗ FAIL — estas filas no fueron normalizadas:');
+    console.table(residualLower);
+  }
+
+  // === 9. Pass/fail global ===
+  const allPassExpected = checks.every((c) => c.pass === '✓');
+  const allPassResidual = residualLower.length === 0;
+  const allPassCasing = casingTwins.length === 0;
+  const allPassAlias = [...aliasGroups.values()].every((v) => v.size <= 1);
+  console.log('\n=== Veredicto ===');
+  console.table([
+    { check: 'Casing twins = 0',                  pass: allPassCasing ? '✓' : '✗' },
+    { check: 'Alias twins (Cartagena) = 0',       pass: allPassAlias ? '✓' : '✗' },
+    { check: 'Lowercase residual = 0',            pass: allPassResidual ? '✓' : '✗' },
+    { check: 'Top-5 ciudades dentro de tolerancia', pass: allPassExpected ? '✓' : '✗' },
+  ]);
+  const overallPass = allPassExpected && allPassResidual && allPassCasing && allPassAlias;
+  if (!overallPass) process.exit(1);
 }
 
 main();
