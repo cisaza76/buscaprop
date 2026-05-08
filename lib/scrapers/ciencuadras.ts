@@ -159,7 +159,7 @@ export async function scrapeCiencuadras(
 
     let html: string;
     try {
-      html = await fetchText(url);
+      html = await fetchText(url, { portal: 'ciencuadras' });
       result.fetched++;
     } catch (err) {
       result.errors.push({
@@ -219,7 +219,7 @@ function finalize(result: ScrapeResult, t0: number): ScrapeResult {
 // ============================================================================
 
 async function findOpIndices(ops: string[]): Promise<string[]> {
-  const xml = await fetchXml(CIENCUADRAS_ROOT_SITEMAP);
+  const xml = await fetchXml(CIENCUADRAS_ROOT_SITEMAP, { portal: 'ciencuadras' });
   const sitemaps = parseSitemapIndex(xml);
   return sitemaps.filter((u) =>
     ops.some((op) => u.includes(`sitemap-index-detalles-inmuebles-${op}.xml`))
@@ -227,7 +227,7 @@ async function findOpIndices(ops: string[]): Promise<string[]> {
 }
 
 async function findCitySubmaps(opIndex: string, cities: string[]): Promise<string[]> {
-  const xml = await fetchXml(opIndex);
+  const xml = await fetchXml(opIndex, { portal: 'ciencuadras' });
   const sitemaps = parseSitemapIndex(xml);
   return sitemaps.filter((u) => {
     // ej "sitemap-detalles-venta-bogota.xml" o "sitemap-detalles-venta-bogota-3.xml"
@@ -239,7 +239,7 @@ async function findCitySubmaps(opIndex: string, cities: string[]): Promise<strin
 }
 
 async function collectListingUrls(sitemapUrl: string): Promise<string[]> {
-  const xml = await fetchXml(sitemapUrl);
+  const xml = await fetchXml(sitemapUrl, { portal: 'ciencuadras' });
   return parseUrlSet(xml);
 }
 

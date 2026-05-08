@@ -1,6 +1,8 @@
 // lib/scrapers/shared/http.ts
 // Cliente HTTP "respetuoso" para scrapers: User-Agent rotativo por host,
-// rate limit por host, retry con status-aware backoff, timeouts.
+// rate limit por host, retry con status-aware backoff, timeouts. Telemetría
+// opcional vía metrics.recordAttempt() — el caller pasa `portal` en opts y
+// cada attempt queda registrado en scrape_attempts.
 //
 // Contexto del recon (semana 2 anti-ban, 2026-05-08):
 //   - Ciencuadras, Fincaraíz, Metrocuadrado, Properati toleran ≤300ms desde
@@ -12,6 +14,8 @@
 //   - 36% de ticks de Inngest timeoutaban a 300s — bottleneck era el
 //     minDelayMs=3500ms × TICK_MAX=35 = 122s base. Bajamos a 1500ms (5x
 //     margen vs threshold real, pero deja 247s para fetch + parse + upsert).
+
+import { recordAttempt, classifyStatus, type ErrorKind } from './metrics';
 
 // ============================================================================
 // User-Agent rotation
@@ -129,9 +133,14 @@ export interface HttpOptions {
   timeoutMs?: number;
   /** Headers extra (merge sobre los de browser). */
   headers?: Record<string, string>;
+  /**
+   * Si se pasa, cada attempt se registra en scrape_attempts con este portal.
+   * Si se omite, no hay telemetría (silencioso).
+   */
+  portal?: string;
 }
 
-const DEFAULTS: Required<Omit<HttpOptions, 'headers' | 'userAgent'>> = {
+const DEFAULTS: Required<Omit<HttpOptions, 'headers' | 'userAgent' | 'portal'>> = {
   minDelayMs: 1500,
   maxRetries: 3,
   timeoutMs: 25_000,
@@ -157,6 +166,30 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+    const t0 = Date.now();
+
+    // Helper para emitir métrica si el caller pasó portal. Captura el state
+    // local relevante en el momento de la llamada.
+    const record = (
+      status: number | null,
+      bytes: number | null,
+      kind: ErrorKind,
+      msg: string | null
+    ) => {
+      if (!opts.portal) return;
+      recordAttempt({
+        portal: opts.portal,
+        host,
+        url,
+        status_code: status,
+        response_ms: Date.now() - t0,
+        bytes,
+        ua,
+        attempt: attempt + 1,
+        error_kind: kind,
+        error_message: msg,
+      });
+    };
 
     try {
       const res = await fetch(url, {
@@ -172,6 +205,7 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
 
       // 429: respetar Retry-After si viene; sino 60s + jitter.
       if (res.status === 429) {
+        record(429, null, 'http_429', `Retry-After: ${res.headers.get('retry-after') ?? 'none'}`);
         const retryAfter = res.headers.get('retry-after');
         const waitMs = retryAfter
           ? parseRetryAfter(retryAfter)
@@ -185,6 +219,7 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
       // 403: WAF block. Pause largo (~10 min) + rotar UA antes del próximo intento.
       // Si el portal está banando este UA, el siguiente attempt usa otro.
       if (res.status === 403) {
+        record(403, null, 'http_403', null);
         const waitMs = 600_000 + Math.floor(Math.random() * 30_000);
         console.warn(
           `[http] 403 on ${host} — rotando UA y esperando ${Math.round(waitMs / 1000)}s`
@@ -197,6 +232,7 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
 
       // 5xx: backoff exponencial corto, retry.
       if (res.status >= 500 && res.status < 600) {
+        record(res.status, null, 'http_5xx', null);
         const backoffMs = 2 ** attempt * 1500 + Math.floor(Math.random() * 500);
         await sleep(backoffMs);
         attempt++;
@@ -205,14 +241,20 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
+        record(res.status, body.length, classifyStatus(res.status), body.slice(0, 200));
         throw new HttpError(res.status, url, body.slice(0, 500));
       }
 
-      return await res.text();
+      const text = await res.text();
+      record(res.status, text.length, 'ok', null);
+      return text;
     } catch (err) {
       clearTimeout(timer);
+      if (err instanceof HttpError) throw err; // ya registrado arriba
       lastErr = err;
       // Network/abort: retry con backoff.
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      record(null, null, isAbort ? 'timeout' : 'network', err instanceof Error ? err.message : String(err));
       const backoffMs = 2 ** attempt * 1500;
       await sleep(backoffMs);
       attempt++;

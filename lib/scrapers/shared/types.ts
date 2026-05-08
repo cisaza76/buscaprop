@@ -32,6 +32,13 @@ export interface ScrapedProperty {
   /** Nombre de la empresa/agencia (ej: "Profesionales Inmobiliarios"). */
   company_name?: string;
   scraped_at?: string; // ISO timestamp; default = ahora.
+  /**
+   * Timestamp del <lastmod> declarado por el sitemap del portal para esta URL.
+   * Cuando se persiste, el próximo tick puede skipear el fetch de detalle si
+   * el sitemap dice que la propiedad no cambió. Solo escrito si el scraper
+   * lo capturó del sitemap; null si no aplica.
+   */
+  source_lastmod?: string | null;
 }
 
 // Resultado agregado de una corrida de scraper.

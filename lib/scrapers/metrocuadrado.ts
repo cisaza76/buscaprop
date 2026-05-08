@@ -173,7 +173,7 @@ export async function scrapeMetroCuadrado(
       : `${M2_BASE}/${combo.type}/${combo.op}/${combo.city}/`;
     let html: string;
     try {
-      html = await fetchText(url, { userAgent: M2_UA });
+      html = await fetchText(url, { userAgent: M2_UA, portal: 'metrocuadrado' });
       result.fetched++;
     } catch (err) {
       result.errors.push({
@@ -555,7 +555,7 @@ interface M2DetailData {
 }
 
 export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
-  const html = await fetchText(item.source_url, { userAgent: M2_UA });
+  const html = await fetchText(item.source_url, { userAgent: M2_UA, portal: 'metrocuadrado' });
   const chunks = extractRscChunks(html);
   const data = extractDetailData(chunks) as M2DetailData | null;
 

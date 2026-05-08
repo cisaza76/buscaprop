@@ -26,9 +26,15 @@ function getServerClient(): SupabaseClient {
 }
 
 // Detecta qué columnas opcionales están disponibles en la BD. Las migraciones
-// 003 y 004 agregan distintos campos; los scrapers degradan gracefully si
+// 003, 004, 016 agregan distintos campos; los scrapers degradan gracefully si
 // alguna no está aplicada. Cache por proceso para no sniffer en cada upsert.
-const OPTIONAL_COLUMNS = ['dedup_hash', 'contact_name', 'contact_phone', 'company_name'] as const;
+const OPTIONAL_COLUMNS = [
+  'dedup_hash',
+  'contact_name',
+  'contact_phone',
+  'company_name',
+  'source_lastmod', // migration 016 — cache por lastmod del sitemap
+] as const;
 type OptionalCol = (typeof OPTIONAL_COLUMNS)[number];
 
 let availableColumns: Set<OptionalCol> | null = null;
@@ -57,6 +63,7 @@ async function detectAvailableColumns(supabase: SupabaseClient): Promise<Set<Opt
     if (missing.includes('dedup_hash')) migs.push('003_add_dedup_hash.sql');
     if (missing.some((c) => c === 'contact_name' || c === 'contact_phone' || c === 'company_name'))
       migs.push('004_add_contact_fields.sql');
+    if (missing.includes('source_lastmod')) migs.push('016_scrape_observability.sql');
     console.warn(
       `⚠️  Columnas opcionales no disponibles: ${m}. ` +
         `Ejecutar en Supabase SQL Editor: ${migs.join(', ')}`
@@ -133,6 +140,11 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
   if (available.has('contact_name')) row.contact_name = p.contact_name ?? null;
   if (available.has('contact_phone')) row.contact_phone = p.contact_phone ?? null;
   if (available.has('company_name')) row.company_name = p.company_name ?? null;
+  // source_lastmod: solo lo escribimos si el scraper lo provee. Si no viene,
+  // dejamos lo que ya estaba (no sobrescribir con null en cada UPDATE).
+  if (available.has('source_lastmod') && p.source_lastmod !== undefined) {
+    row.source_lastmod = p.source_lastmod;
+  }
 
   const { data: upserted, error } = await supabase
     .from('properties')

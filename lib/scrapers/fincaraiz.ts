@@ -180,7 +180,7 @@ export async function scrapeFincaraiz(
 
       let html: string;
       try {
-        html = await fetchText(url);
+        html = await fetchText(url, { portal: 'fincaraiz' });
         result.fetched++;
       } catch (err) {
         result.errors.push({
@@ -263,7 +263,7 @@ async function discoverChildSitemaps(filters: {
   propertyTypes: string[];
   listingTypes: string[];
 }): Promise<string[]> {
-  const xml = await fetchXml(FINCARAIZ_SITEMAP_INDEX);
+  const xml = await fetchXml(FINCARAIZ_SITEMAP_INDEX, { portal: 'fincaraiz' });
   const parser = new XMLParser({ ignoreAttributes: true });
   const data = parser.parse(xml);
   const raw = data?.sitemapindex?.sitemap;
@@ -284,7 +284,7 @@ async function discoverChildSitemaps(filters: {
 }
 
 async function collectListingUrls(sitemapUrl: string): Promise<string[]> {
-  const xml = await fetchXml(sitemapUrl);
+  const xml = await fetchXml(sitemapUrl, { portal: 'fincaraiz' });
   const parser = new XMLParser({ ignoreAttributes: true });
   const data = parser.parse(xml);
   const raw = data?.urlset?.url;

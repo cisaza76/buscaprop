@@ -169,6 +169,40 @@ const CITY_CANONICAL: Record<string, string> = {
   jamundi: 'Jamundí',
   palmira: 'Palmira',
   turbo: 'Turbo',
+
+  // Long-tail descubierto en audit post-migración 015 (2026-05-08). Mismo
+  // patrón del bug del slug-parser de fincaraiz que extrae la última palabra.
+  // Capitales de departamento que entraron lowercase (manizales ya está arriba):
+  armenia: 'Armenia',
+  tulua: 'Tuluá',
+  // Multi-palabra "san <X>" o "<X> de <Y>" partidas mal:
+  pedro: 'San Pedro',
+  domingo: 'Santo Domingo',
+  rosario: 'Villa del Rosario',
+  isabel: 'Santa Isabel',
+  macarena: 'La Macarena',
+  // Antioquia long-tail:
+  guatape: 'Guatapé',
+  necocli: 'Necoclí',
+  yarumal: 'Yarumal',
+  fredonia: 'Fredonia',
+  cocorna: 'Cocorná',
+  sopetran: 'Sopetrán',
+  penol: 'El Peñol',
+  belalcazar: 'Belalcázar',
+  ebejico: 'Ebéjico',
+  girardot: 'Girardot',
+  venecia: 'Venecia',
+  // Atlántico / otros:
+  soledad: 'Soledad',
+  candelaria: 'Candelaria',
+  versalles: 'Versalles',
+  sitionuevo: 'Sitionuevo',
+  buenavista: 'Buenavista',
+  // 'colombia' como city es realmente el municipio Colombia (Huila):
+  colombia: 'Colombia',
+  // 'aires' = "Buenos Aires" (Cauca, Antioquia o Valle):
+  aires: 'Buenos Aires',
 };
 
 export function canonicalCity(raw: string | null | undefined): string | null {

@@ -134,7 +134,7 @@ export async function scrapeProperati(
 
       let html: string;
       try {
-        html = await fetchText(url, { userAgent: PROPERATI_UA });
+        html = await fetchText(url, { userAgent: PROPERATI_UA, portal: 'properati' });
         result.fetched++;
       } catch (err) {
         result.errors.push({
@@ -387,7 +387,7 @@ export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
   // Solo necesitamos el HTML para regex de coords. No parseamos cheerio
   // porque el script con coords NO es elemento DOM — es contenido de un
   // <script> inline.
-  const html = await fetchText(item.source_url, { userAgent: PROPERATI_UA });
+  const html = await fetchText(item.source_url, { userAgent: PROPERATI_UA, portal: 'properati' });
   const coords = parseCoordsFromHtml(html);
   if (coords) {
     item.latitude = coords.latitude;
