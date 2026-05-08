@@ -23,6 +23,7 @@ export const maxDuration = 30;
 
 const FROM = 'BuscaProp <leads@buscaprop.co>';
 const RESEND_URL = 'https://api.resend.com/emails';
+const APP_BASE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://buscaprop.co';
 const MAX_VISITS = 5;
 const MAX_OPENED = 8;
 const MAX_SEARCHES = 6;
@@ -362,17 +363,26 @@ function renderEmail(ctx: EmailContext): { html: string; text: string } {
     ? `<a href="mailto:${ctx.email}" style="color:#0a7d6c">${ctx.email}</a>`
     : '—';
 
+  // CTA al viewer interno — la acción más valiosa para el asesor.
+  const viewerUrl = ctx.conversationId
+    ? `${APP_BASE_URL}/dashboard/conversations/${ctx.conversationId}`
+    : null;
+  const viewerCta = viewerUrl
+    ? `<p style="margin:0 0 20px"><a href="${viewerUrl}" style="display:inline-block;padding:10px 18px;background:#0a7d6c;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px">Ver chat completo →</a></p>`
+    : '';
+
   // Header
   const header = `
     <h2 style="margin:0 0 4px;font-size:20px">🔔 Nuevo lead BuscaProp</h2>
     <p style="margin:0 0 20px;color:#666;font-size:14px">
       Score <strong>${ctx.leadScore ?? '—'}</strong> · canal ${escapeHtml(ctx.channel)}
     </p>
-    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:24px">
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px">
       <tr><td style="padding:4px 12px 4px 0;color:#666;width:90px">Nombre</td><td>${escapeHtml(ctx.fullName ?? '—')}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666">Email</td><td>${emailLink}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666">Teléfono</td><td>${phoneLink}</td></tr>
-    </table>`;
+    </table>
+    ${viewerCta}`;
 
   // Resumen interés
   const interestHtml = ctx.firstUserMessage
@@ -490,6 +500,9 @@ function renderEmail(ctx: EmailContext): { html: string; text: string } {
     `Teléfono:  ${ctx.phone ? '+57 ' + ctx.phone : '—'}`,
     '',
   ];
+  if (viewerUrl) {
+    lines.push(`Ver chat completo: ${viewerUrl}`, '');
+  }
   if (ctx.firstUserMessage) {
     lines.push('📝 Mensaje inicial:', ctx.firstUserMessage, '');
   }

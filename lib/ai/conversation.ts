@@ -56,6 +56,25 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   preferences: ConversationPreferences;
+  // UTM tracking — capturado en el INSERT desde el cliente. NUNCA se sobreescribe
+  // (preserva first-touch attribution). Null en conversaciones legacy.
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_term: string | null;
+  utm_content: string | null;
+  referrer: string | null;
+  landing_path: string | null;
+}
+
+export interface UtmInput {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_term?: string;
+  utm_content?: string;
+  referrer?: string;
+  landing_path?: string;
 }
 
 export interface ConversationMessage {
@@ -83,10 +102,14 @@ export interface ConversationMessage {
  */
 export async function getOrCreateWebConversation(
   sessionId: string,
-  opts: { userId?: string | null; propertyId?: string } = {}
+  opts: {
+    userId?: string | null;
+    propertyId?: string;
+    utm?: UtmInput;
+  } = {}
 ): Promise<Conversation> {
   const sb = getServerClient();
-  const { userId = null, propertyId } = opts;
+  const { userId = null, propertyId, utm = {} } = opts;
 
   let lookup = sb
     .from('conversations')
@@ -103,7 +126,7 @@ export async function getOrCreateWebConversation(
 
   if (existing) return normalizeConversation(existing as Record<string, unknown>);
 
-  // Crear nueva.
+  // Crear nueva. UTM solo se persiste en el INSERT (first-touch attribution).
   const { data: created, error } = await sb
     .from('conversations')
     .insert({
@@ -111,6 +134,13 @@ export async function getOrCreateWebConversation(
       session_id: sessionId,
       user_id: userId,
       property_id: propertyId ?? null,
+      utm_source: utm.utm_source ?? null,
+      utm_medium: utm.utm_medium ?? null,
+      utm_campaign: utm.utm_campaign ?? null,
+      utm_term: utm.utm_term ?? null,
+      utm_content: utm.utm_content ?? null,
+      referrer: utm.referrer ?? null,
+      landing_path: utm.landing_path ?? null,
     })
     .select('*')
     .single();

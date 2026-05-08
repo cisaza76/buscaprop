@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
+import { getStoredUtm } from '@/lib/utm';
 
 interface ChatWidgetProps {
   /** Si la conversación arranca desde una propiedad específica (opcional). */
@@ -113,6 +114,9 @@ export function ChatWidget({
           session_id: sessionId,
           message: trimmed,
           property_id: propertyId,
+          // UTM attribution — el server solo lo persiste en el INSERT inicial
+          // de la conversación, sobreescribirlo después no tendría efecto.
+          utm: getStoredUtm(),
         }),
       });
       const data: ChatResponse = await res.json();

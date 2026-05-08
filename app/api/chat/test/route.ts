@@ -52,10 +52,11 @@ export async function POST(request: NextRequest) {
     return jsonError('Body debe ser JSON válido', 400);
   }
 
-  const { session_id, message, property_id } = body as {
+  const { session_id, message, property_id, utm } = body as {
     session_id?: string;
     message?: string;
     property_id?: string;
+    utm?: Record<string, string | undefined>;
   };
 
   // Validación.
@@ -81,6 +82,7 @@ export async function POST(request: NextRequest) {
     const conversation = await getOrCreateWebConversation(session_id, {
       userId,
       propertyId: property_id,
+      utm: sanitizeUtm(utm),
     });
     const result = await generateAIResponse(conversation, trimmed);
 
@@ -119,4 +121,27 @@ export async function GET() {
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ ok: false, error: message }, { status });
+}
+
+// Whitelist UTM fields y trim a 200 chars cada uno — defensa contra payload
+// abusivo que intente meter strings enormes en columnas text.
+function sanitizeUtm(raw: Record<string, string | undefined> | undefined) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const ALLOWED = [
+    'utm_source',
+    'utm_medium',
+    'utm_campaign',
+    'utm_term',
+    'utm_content',
+    'referrer',
+    'landing_path',
+  ] as const;
+  const out: Record<string, string> = {};
+  for (const k of ALLOWED) {
+    const v = raw[k];
+    if (typeof v === 'string' && v.length > 0) {
+      out[k] = v.slice(0, 200);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
