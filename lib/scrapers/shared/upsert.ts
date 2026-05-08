@@ -7,6 +7,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { dedupeHash } from './dedupe';
+import { canonicalCity, cleanLeftoverNeighborhood } from './normalize';
 import type { ScrapedProperty } from './types';
 
 let cachedClient: SupabaseClient | null = null;
@@ -74,6 +75,13 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
   const supabase = getServerClient();
   const available = await detectAvailableColumns(supabase);
 
+  // Normalización central, defense-in-depth. Aunque un scraper individual no
+  // llame a canonicalCity (ej. fincaraiz cuando saca city='vicente' del slug),
+  // aquí se corrige antes de tocar la BD. Idempotente: si ya viene canonical,
+  // canonicalCity() lo devuelve igual.
+  const normalizedCity = canonicalCity(p.city) ?? p.city;
+  const normalizedNeighborhood = cleanLeftoverNeighborhood(p.neighborhood);
+
   let canonicalId: string | null = null;
   let hash: string | null = null;
   if (available.has('dedup_hash')) {
@@ -107,8 +115,8 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
     title: p.title,
     description: p.description ?? null,
     price_cop: p.price_cop,
-    city: p.city,
-    neighborhood: p.neighborhood ?? null,
+    city: normalizedCity,
+    neighborhood: normalizedNeighborhood,
     bedrooms: p.bedrooms ?? null,
     bathrooms: p.bathrooms ?? null,
     area_m2: p.area_m2 ?? null,

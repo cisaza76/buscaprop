@@ -90,17 +90,85 @@ export function mapListingType(raw: string | null | undefined): ListingType | nu
 }
 
 // Normaliza ciudades a nombres canónicos del schema (con tildes).
+// La key se busca con casefold (ver canonicalCity): minúsculas, sin tildes,
+// sin puntuación. Por eso aparecen variantes como 'bogota d c' (sin punto).
+//
+// Casos cubiertos:
+//   1. Capitales y ciudades grandes (bogota → Bogotá, etc.)
+//   2. Aliases obvios (cartagena de indias → Cartagena)
+//   3. Municipios Antioquia que el parser de fincaraiz devuelve en lowercase
+//      (envigado, sabaneta, etc.) por culpa de un bug que extrae la última
+//      palabra del slug — ver normalize-test/audit-city-casing.ts
+//   4. Bugs específicos del slug: "san vicente" → city='vicente', etc.
+//      Mapeamos al canonical aunque sea ligeramente impreciso (ej. "san miguel"
+//      sin departamento) — mejor que dejar lowercase basura.
 const CITY_CANONICAL: Record<string, string> = {
+  // Capitales / áreas metropolitanas grandes
   bogota: 'Bogotá',
   'bogota dc': 'Bogotá',
   'bogota d c': 'Bogotá',
   'bogota d.c.': 'Bogotá',
   medellin: 'Medellín',
   cali: 'Cali',
+  'santiago de cali': 'Cali',
   barranquilla: 'Barranquilla',
   cartagena: 'Cartagena',
+  'cartagena de indias': 'Cartagena',
   bucaramanga: 'Bucaramanga',
   pereira: 'Pereira',
+  'santa marta': 'Santa Marta',
+  manizales: 'Manizales',
+  ibague: 'Ibagué',
+  cucuta: 'Cúcuta',
+  villavicencio: 'Villavicencio',
+  popayan: 'Popayán',
+  pasto: 'Pasto',
+  monteria: 'Montería',
+  neiva: 'Neiva',
+
+  // Antioquia (área metropolitana del Valle de Aburrá + cercanos)
+  envigado: 'Envigado',
+  rionegro: 'Rionegro',
+  sabaneta: 'Sabaneta',
+  retiro: 'El Retiro',
+  bello: 'Bello',
+  ceja: 'La Ceja',
+  itagui: 'Itagüí',
+  guarne: 'Guarne',
+  estrella: 'La Estrella',
+  copacabana: 'Copacabana',
+  marinilla: 'Marinilla',
+  girardota: 'Girardota',
+  amaga: 'Amagá',
+  caldas: 'Caldas',
+  barbosa: 'Barbosa',
+  carepa: 'Carepa',
+  apartado: 'Apartadó',
+
+  // Multi-palabra que el parser fincaraiz parte mal (bug):
+  // - "santafe de antioquia" → city='antioquia'
+  // - "san vicente"          → city='vicente'
+  // - "san jeronimo"          → city='jeronimo'
+  // - "san miguel"            → city='miguel'
+  // - "el carmen de viboral"  → city='viboral'
+  // Aquí los mapeamos al canonical aunque venga el último token solo.
+  antioquia: 'Santa Fe de Antioquia',
+  'santafe de antioquia': 'Santa Fe de Antioquia',
+  'santa fe de antioquia': 'Santa Fe de Antioquia',
+  vicente: 'San Vicente Ferrer',
+  'san vicente': 'San Vicente Ferrer',
+  'san vicente ferrer': 'San Vicente Ferrer',
+  jeronimo: 'San Jerónimo',
+  'san jeronimo': 'San Jerónimo',
+  miguel: 'San Miguel',
+  'san miguel': 'San Miguel',
+  viboral: 'El Carmen de Viboral',
+  'el carmen de viboral': 'El Carmen de Viboral',
+
+  // Valle / otros
+  jamundi: 'Jamundí',
+  palmira: 'Palmira',
+  turbo: 'Turbo',
 };
 
 export function canonicalCity(raw: string | null | undefined): string | null {
@@ -113,7 +181,41 @@ export function canonicalCity(raw: string | null | undefined): string | null {
     .replace(/[^a-z\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return CITY_CANONICAL[k] ?? raw.trim();
+  if (CITY_CANONICAL[k]) return CITY_CANONICAL[k];
+  // Fallback: si NO está en el mapping pero viene en lowercase puro y tiene
+  // 3+ chars, capitalizar primera letra (defensa contra futuros municipios
+  // que el parser saque en lowercase pero no estén en el map).
+  const trimmed = raw.trim();
+  if (trimmed.length >= 3 && trimmed === trimmed.toLowerCase()) {
+    return trimmed[0].toUpperCase() + trimmed.slice(1);
+  }
+  return trimmed;
+}
+
+// Limpia neighborhoods que son leftover del bug del slug-parser de fincaraiz.
+// Cuando el parser confunde "san-vicente" como city='vicente' + neighborhood='San',
+// el neighborhood queda como basura: "San", "El Carmen De", "Santafe De", etc.
+// Estos son sufijos de prefijos de ciudad multi-palabra, no barrios reales.
+const LEFTOVER_NEIGHBORHOOD_PATTERNS = [
+  /^san$/i,
+  /^santa$/i,
+  /^santafe$/i,
+  /^santafe de$/i,
+  /^santa fe de$/i,
+  /^el$/i,
+  /^la$/i,
+  /^el carmen de$/i,
+  /^la ceja$/i,
+];
+
+export function cleanLeftoverNeighborhood(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  for (const pat of LEFTOVER_NEIGHBORHOOD_PATTERNS) {
+    if (pat.test(trimmed)) return null;
+  }
+  return trimmed;
 }
 
 // ============================================================================
