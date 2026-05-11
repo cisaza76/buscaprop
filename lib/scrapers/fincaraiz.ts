@@ -7,6 +7,11 @@
 import * as cheerio from 'cheerio';
 import { XMLParser } from 'fast-xml-parser';
 import { fetchText, fetchXml } from './shared/http';
+import {
+  parseUrlSetWithLastmod,
+  filterUrlsToScrape,
+  type SitemapEntry,
+} from './shared/sitemap';
 import { upsertBatch } from './shared/upsert';
 import {
   canonicalCity,
@@ -244,65 +249,82 @@ export async function scrapeFincaraiz(
   let nextUrlIdx = startUrlIdx;
   let completedFullCycle = false;
 
+  let skippedByCache = 0;
+
   outer: for (let sIdx = startSitemapIdx; sIdx < childSitemaps.length; sIdx++) {
     const sitemapUrl = childSitemaps[sIdx];
-    let urls: string[];
+    let entries: SitemapEntry[];
     try {
-      urls = await collectListingUrls(sitemapUrl);
+      entries = await collectListingEntries(sitemapUrl);
     } catch (err) {
       result.errors.push({
         url: sitemapUrl,
         stage: 'discovery',
         message: err instanceof Error ? err.message : String(err),
       });
-      // Skip al siguiente sitemap.
       nextSitemapIdx = sIdx + 1;
       nextUrlIdx = 0;
       startUrlIdx = 0;
       continue;
     }
-    result.discovered += urls.length;
+    result.discovered += entries.length;
 
-    for (let uIdx = startUrlIdx; uIdx < urls.length; uIdx++) {
+    // Cache-by-lastmod: pre-cargar para una ventana de lookahead dentro
+    // de este sitemap. Limita el .in() a un tamaño razonable (~175 URLs).
+    const lookahead = entries.slice(startUrlIdx, startUrlIdx + maxListings * 5);
+    const toFetch = await filterUrlsToScrape('fincaraiz', lookahead);
+    const fetchSet = new Set(toFetch.map((e) => e.url));
+    const lookaheadEnd = startUrlIdx + lookahead.length;
+
+    for (let uIdx = startUrlIdx; uIdx < entries.length; uIdx++) {
       if (items.length >= maxListings) {
         nextSitemapIdx = sIdx;
         nextUrlIdx = uIdx;
         break outer;
       }
-      const url = urls[uIdx];
-      if (seen.has(url)) continue;
-      seen.add(url);
+      const entry = entries[uIdx];
+      if (seen.has(entry.url)) continue;
+      seen.add(entry.url);
+
+      // Cache hit dentro de la ventana de lookahead.
+      if (uIdx < lookaheadEnd && !fetchSet.has(entry.url)) {
+        skippedByCache++;
+        continue;
+      }
 
       let html: string;
       try {
-        html = await fetchText(url, { portal: 'fincaraiz' });
+        html = await fetchText(entry.url, { portal: 'fincaraiz' });
         result.fetched++;
       } catch (err) {
         result.errors.push({
-          url,
+          url: entry.url,
           stage: 'fetch',
           message: err instanceof Error ? err.message : String(err),
         });
         continue;
       }
       try {
-        const item = parseFincaraizListing(url, html);
+        const item = parseFincaraizListing(entry.url, html);
         if (item) {
+          if (entry.lastmod) item.source_lastmod = entry.lastmod;
           items.push(item);
           result.parsed++;
         }
       } catch (err) {
         result.errors.push({
-          url,
+          url: entry.url,
           stage: 'parse',
           message: err instanceof Error ? err.message : String(err),
         });
       }
     }
-    // Terminamos este sitemap, avanzar al siguiente reseteando url_idx.
     nextSitemapIdx = sIdx + 1;
     nextUrlIdx = 0;
     startUrlIdx = 0;
+  }
+  if (skippedByCache > 0) {
+    console.log(`[fincaraiz] cache-by-lastmod: skipped ${skippedByCache} URLs sin cambios`);
   }
 
   // Si recorrimos todos los sitemaps sin llenar maxListings, completamos ciclo.
@@ -378,17 +400,9 @@ async function discoverChildSitemaps(filters: {
     });
 }
 
-async function collectListingUrls(sitemapUrl: string): Promise<string[]> {
+async function collectListingEntries(sitemapUrl: string): Promise<SitemapEntry[]> {
   const xml = await fetchXml(sitemapUrl, { portal: 'fincaraiz' });
-  const parser = new XMLParser({ ignoreAttributes: true });
-  const data = parser.parse(xml);
-  const raw = data?.urlset?.url;
-  const list: Array<{ loc?: string; lastmod?: string }> = Array.isArray(raw)
-    ? raw
-    : raw
-      ? [raw]
-      : [];
-  return list.map((u) => u?.loc).filter((u): u is string => typeof u === 'string');
+  return parseUrlSetWithLastmod(xml);
 }
 
 // Parsea una página detalle. Retorna null si:
