@@ -22,6 +22,11 @@ import {
   parseInteger,
   parseCOP,
 } from './shared/normalize';
+import {
+  parseUrlSetWithLastmod,
+  filterUrlsToScrape,
+  type SitemapEntry,
+} from './shared/sitemap';
 import type {
   ListingType,
   PropertyType,
@@ -110,8 +115,8 @@ export async function scrapeCiencuadras(
   }
 
   // 2. Por cada op-index → encontrar sub-sitemaps por ciudad
-  // 3. Por cada (op, city) sub-sitemap → recolectar listing URLs (round-robin)
-  const urlsByCombo: Array<string[]> = [];
+  // 3. Por cada (op, city) sub-sitemap → recolectar listing URLs + lastmod
+  const urlsByCombo: Array<SitemapEntry[]> = [];
   for (const opIndex of opIndices) {
     let citySubmaps: string[];
     try {
@@ -126,8 +131,8 @@ export async function scrapeCiencuadras(
     }
     for (const sub of citySubmaps) {
       try {
-        const urls = await collectListingUrls(sub);
-        if (urls.length > 0) urlsByCombo.push(urls);
+        const entries = await collectListingEntries(sub);
+        if (entries.length > 0) urlsByCombo.push(entries);
       } catch (err) {
         result.errors.push({
           url: sub,
@@ -139,49 +144,73 @@ export async function scrapeCiencuadras(
   }
 
   // 4. Round-robin: tomamos 1 URL de cada combo para diversidad geográfica.
-  const queue: string[] = roundRobinFlatten(urlsByCombo);
+  const queue: SitemapEntry[] = roundRobinFlatten(urlsByCombo);
   result.discovered = queue.length;
+
+  // 4b. Cache-by-lastmod: pre-cargar el cache para una ventana de lookahead.
+  // Usamos 5x maxListings como buffer — si la mayoría de URLs hit cache,
+  // necesitamos mirar varias adelante para juntar maxListings reales a
+  // fetchear. En el peor caso (todas cacheadas), el tick simplemente avanza
+  // el cursor sin fetchear nada — eso es exactamente lo que queremos.
+  const startIdx = opts.cursor?.url_idx ?? 0;
+  const lookahead = queue.slice(startIdx, startIdx + maxListings * 5);
+  const toFetch = await filterUrlsToScrape('ciencuadras', lookahead);
+  const fetchSet = new Set(toFetch.map((e) => e.url));
+  const lookaheadEnd = startIdx + lookahead.length;
 
   // 5. Detail-fetch + parse hasta llenar maxListings (cursor-aware).
   const items: ScrapedProperty[] = [];
   const seen = new Set<string>();
-  const startIdx = opts.cursor?.url_idx ?? 0;
+  let skippedByCache = 0;
   let nextIdx = startIdx;
   for (let i = startIdx; i < queue.length; i++) {
-    const url = queue[i];
+    const entry = queue[i];
     if (items.length >= maxListings) {
       nextIdx = i;
       break;
     }
     nextIdx = i + 1;
-    if (seen.has(url)) continue;
-    seen.add(url);
+    if (seen.has(entry.url)) continue;
+    seen.add(entry.url);
+
+    // Cache hit: si la URL está dentro del lookahead pre-cargado y el filtro
+    // dijo que NO necesita refresh, skipear sin fetchear.
+    if (i < lookaheadEnd && !fetchSet.has(entry.url)) {
+      skippedByCache++;
+      continue;
+    }
 
     let html: string;
     try {
-      html = await fetchText(url, { portal: 'ciencuadras' });
+      html = await fetchText(entry.url, { portal: 'ciencuadras' });
       result.fetched++;
     } catch (err) {
       result.errors.push({
-        url,
+        url: entry.url,
         stage: 'fetch',
         message: err instanceof Error ? err.message : String(err),
       });
       continue;
     }
     try {
-      const item = parseCiencuadrasListing(url, html);
+      const item = parseCiencuadrasListing(entry.url, html);
       if (item) {
+        // Capturar el lastmod del sitemap para que el próximo tick pueda
+        // decidir si re-scrapear o no.
+        if (entry.lastmod) item.source_lastmod = entry.lastmod;
         items.push(item);
         result.parsed++;
       }
     } catch (err) {
       result.errors.push({
-        url,
+        url: entry.url,
         stage: 'parse',
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  if (skippedByCache > 0) {
+    console.log(`[ciencuadras] cache-by-lastmod: skipped ${skippedByCache} URLs sin cambios`);
   }
 
   // Cursor: si terminamos toda la queue, reset a 0 (re-escaneo refresca).
@@ -238,9 +267,9 @@ async function findCitySubmaps(opIndex: string, cities: string[]): Promise<strin
   });
 }
 
-async function collectListingUrls(sitemapUrl: string): Promise<string[]> {
+async function collectListingEntries(sitemapUrl: string): Promise<SitemapEntry[]> {
   const xml = await fetchXml(sitemapUrl, { portal: 'ciencuadras' });
-  return parseUrlSet(xml);
+  return parseUrlSetWithLastmod(xml);
 }
 
 function parseSitemapIndex(xml: string): string[] {
@@ -261,8 +290,8 @@ function parseUrlSet(xml: string): string[] {
 
 // Toma URL[0] de combo[0], URL[0] de combo[1], ... URL[0] de combo[N-1],
 // luego URL[1] de combo[0], etc. Resultado: cantidad balanceada por combo.
-function roundRobinFlatten(buckets: string[][]): string[] {
-  const out: string[] = [];
+function roundRobinFlatten<T>(buckets: T[][]): T[] {
+  const out: T[] = [];
   if (buckets.length === 0) return out;
   let pos = 0;
   let added = true;

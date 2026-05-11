@@ -57,7 +57,45 @@ const SLUG_TYPES = [
   'consultorio',
 ];
 
+// Lista de slugs de ciudad/municipio reconocidos. El parser intenta match
+// exacto contra esta lista PRIMERO. Si matchea, el resto del slug queda
+// como neighborhood. Si NO matchea, el fallback heurístico intenta detectar
+// la ciudad reconociendo prefijos comunes ('san', 'el', 'la', 'santa').
+//
+// Las multi-word slugs deben estar listadas con guiones ('san-vicente', no
+// 'sanvicente') porque el slug del portal viene separado por '-'.
+//
+// Orden importa: variantes más largas DEBEN aparecer antes que las cortas
+// para que el match elija "santa-fe-de-antioquia" antes que "antioquia".
+// La función `.find()` recorre el array en orden, así que cuidado al editar.
 const SLUG_CITIES = [
+  // ─── Multi-word: deben estar PRIMERO ──────────────────────────────
+  'cartagena-de-indias',
+  'santa-fe-de-antioquia',
+  'santafe-de-antioquia',
+  'el-carmen-de-viboral',
+  'villa-del-rosario',
+  'buenos-aires',
+  'santo-domingo',
+  'santa-marta',
+  'santa-isabel',
+  'santa-rosa-de-osos',
+  'san-vicente-ferrer',
+  'san-vicente',
+  'san-jeronimo',
+  'san-pedro',
+  'san-miguel',
+  'san-rafael',
+  'san-luis',
+  'san-carlos',
+  'san-andres',
+  'la-ceja',
+  'la-estrella',
+  'la-macarena',
+  'el-retiro',
+  'el-penol',
+
+  // ─── Capitales / ciudades grandes ────────────────────────────────
   'bogota',
   'medellin',
   'cali',
@@ -72,7 +110,64 @@ const SLUG_CITIES = [
   'monteria',
   'villavicencio',
   'cucuta',
+  'neiva',
+  'popayan',
+  'tunja',
+  'valledupar',
+  'sincelejo',
+
+  // ─── Área metropolitana del Valle de Aburrá ──────────────────────
+  'envigado',
+  'sabaneta',
+  'bello',
+  'itagui',
+  'copacabana',
+  'caldas',
+  'girardota',
+  'barbosa',
+
+  // ─── Oriente antioqueño ──────────────────────────────────────────
+  'rionegro',
+  'guarne',
+  'marinilla',
+  'guatape',
+  'cocorna',
+  'sopetran',
+
+  // ─── Suroeste / Norte Antioquia ──────────────────────────────────
+  'amaga',
+  'fredonia',
+  'venecia',
+  'yarumal',
+  'ebejico',
+  'belalcazar',
+
+  // ─── Urabá ───────────────────────────────────────────────────────
+  'apartado',
+  'turbo',
+  'carepa',
+  'necocli',
+
+  // ─── Valle del Cauca / Cauca / otros ─────────────────────────────
+  'jamundi',
+  'palmira',
+  'tulua',
+  'candelaria',
+  'versalles',
+
+  // ─── Atlántico / Caribe ──────────────────────────────────────────
+  'soledad',
+  'sitionuevo',
+  'buenavista',
+
+  // ─── Casos misc ──────────────────────────────────────────────────
+  'colombia', // municipio en Huila
+  'girardot',
 ];
+
+// Prefijos comunes de ciudad multi-word. Si el último token NO matchea
+// SLUG_CITIES pero el penúltimo es uno de estos, unirlos como ciudad.
+const CITY_PREFIXES = new Set(['san', 'la', 'el', 'santa', 'villa']);
 
 export interface FincaraizOptions {
   /** Cuántas propiedades insertar como máximo en una corrida. */
@@ -500,11 +595,18 @@ export function parseFincaraizSlug(url: string): SlugInfo | null {
     opRaw.includes('alquiler') || opRaw.includes('arriendo') ? 'arriendo' : 'venta';
 
   const hoodAndCity = opMatch[2];
+
+  // 1) Match exacto contra SLUG_CITIES (orden importa: multi-word primero).
   const cityMatch = SLUG_CITIES.find(
     (c) => hoodAndCity === c || hoodAndCity.endsWith(`-${c}`)
   );
   if (cityMatch) {
-    const hoodPart = hoodAndCity.slice(0, hoodAndCity.length - cityMatch.length - 1);
+    // Si la ciudad es exactamente todo el slug → no hay neighborhood.
+    // Si no, el hood es lo que está antes de `-${cityMatch}` (sin el guión).
+    const hoodPart =
+      hoodAndCity === cityMatch
+        ? ''
+        : hoodAndCity.slice(0, hoodAndCity.length - cityMatch.length - 1);
     return {
       type,
       op,
@@ -514,13 +616,49 @@ export function parseFincaraizSlug(url: string): SlugInfo | null {
     };
   }
 
-  // Fallback: último token = ciudad.
+  // 2) Fallback heurístico: si el penúltimo token es un prefijo común
+  //    de ciudad multi-word (san/la/el/santa/villa), unirlos.
+  //    Ej: 'el-guaciro-san-vicente' (no en SLUG_CITIES) → city='san-vicente'
+  //    aunque no estuviera explícita. También maneja "X de Y" → si hay un
+  //    'de' precedido por un prefix, recoger desde ahí.
   const tokens = hoodAndCity.split('-');
+  if (tokens.length < 2) {
+    // Único token — si es muy corto probable basura, descartar.
+    if (tokens[0].length < 4) return null;
+    return { type, op, neighborhood: undefined, city: tokens[0], id };
+  }
+
+  // Detección "X de Y" hacia atrás: santa-fe-de-antioquia → 'santa-fe-de-antioquia'
+  // Buscamos un patrón sufijo: [prefix] [...palabras] 'de' [palabra-final].
+  let cityStart = tokens.length - 1;
+  if (cityStart >= 2 && tokens[cityStart - 1] === 'de') {
+    // Posible "X de Y" — escanear hacia atrás buscando un prefix.
+    for (let i = cityStart - 2; i >= 0; i--) {
+      if (CITY_PREFIXES.has(tokens[i])) {
+        cityStart = i;
+        break;
+      }
+      // Si encontramos otro 'de' o un token corto, paramos la búsqueda
+      // (probable que el hood empiece ahí).
+      if (tokens[i] === 'de' || tokens[i].length <= 2) break;
+    }
+  } else if (cityStart >= 1 && CITY_PREFIXES.has(tokens[cityStart - 1])) {
+    // Caso simple: "san vicente" → tomar penúltimo + último.
+    cityStart = cityStart - 1;
+  }
+
+  const cityParts = tokens.slice(cityStart);
+  const hoodParts = tokens.slice(0, cityStart);
+
+  // Validación: rechazar ciudades sospechosamente cortas (probable basura).
+  const cityCandidate = cityParts.join('-');
+  if (cityCandidate.length < 4) return null;
+
   return {
     type,
     op,
-    neighborhood: tokens.length > 1 ? tokens.slice(0, -1).join('-') : undefined,
-    city: tokens[tokens.length - 1],
+    neighborhood: hoodParts.length > 0 ? hoodParts.join('-') : undefined,
+    city: cityCandidate,
     id,
   };
 }
