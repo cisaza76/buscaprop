@@ -51,6 +51,7 @@ const DEFAULT_TYPES: ProperatiOptions['propertyTypes'] = [
   'apartamento',
   'casa',
   'apartaestudio',
+  'oficina',
 ];
 const DEFAULT_OPS: ProperatiOptions['listingTypes'] = ['venta', 'arriendo'];
 

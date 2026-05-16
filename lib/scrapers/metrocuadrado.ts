@@ -41,6 +41,7 @@ const DEFAULT_TYPES: MetroCuadradoOptions['propertyTypes'] = [
   'casa',
   'oficina',
   'lote',
+  'apartaestudio',
 ];
 const DEFAULT_OPS: MetroCuadradoOptions['listingTypes'] = ['venta', 'arriendo'];
 
@@ -70,8 +71,18 @@ const DEFAULT_BARRIOS: Record<string, string[]> = {
     'salitre',
     'modelia',
   ],
-  medellin: ['poblado', 'laureles', 'envigado', 'sabaneta', 'belen'],
-  cali: ['ciudad-jardin', 'el-penon'],
+  medellin: [
+    'poblado',
+    'laureles',
+    'envigado',
+    'sabaneta',
+    'belen',
+    'conquistadores',
+    'los-balsos',
+    'las-palmas',
+  ],
+  cali: ['ciudad-jardin', 'el-penon', 'granada', 'san-fernando', 'valle-del-lili'],
+  barranquilla: ['alto-prado', 'el-prado', 'riomar', 'villa-country'],
   cartagena: ['centro-historico', 'bocagrande', 'manga'],
 };
 
@@ -80,7 +91,7 @@ export interface MetroCuadradoOptions {
   maxListings?: number;
   /** Slugs de ciudades en el path M2 (sin tildes). */
   cities?: string[];
-  propertyTypes?: Array<'apartamento' | 'casa' | 'oficina' | 'lote'>;
+  propertyTypes?: Array<'apartamento' | 'casa' | 'oficina' | 'lote' | 'apartaestudio'>;
   listingTypes?: Array<'venta' | 'arriendo'>;
   /**
    * Si true (default), agrega combos por barrio premium para capturar más
