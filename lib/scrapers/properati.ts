@@ -45,6 +45,11 @@ const DEFAULT_LOCATIONS = [
   'cali-valle-del-cauca',
   'barranquilla-atlantico',
   'cartagena-bolivar',
+  // Agregadas tras validar slug vía fetch real (apartamento/venta → 30-32 cards).
+  // OJO: el slug de Properati NO es uniforme {ciudad}-{depto} — validar antes de
+  // sumar más (bucaramanga-santander, pereira-risaralda, etc. dan 404).
+  'manizales-caldas',
+  'bello-antioquia',
 ];
 
 const DEFAULT_TYPES: ProperatiOptions['propertyTypes'] = [
@@ -55,7 +60,11 @@ const DEFAULT_TYPES: ProperatiOptions['propertyTypes'] = [
 ];
 const DEFAULT_OPS: ProperatiOptions['listingTypes'] = ['venta', 'arriendo'];
 
-const MAX_PAGES_PER_COMBO = 5; // 32 × 5 = 160 listings/combo, suficiente
+// 32 listings/página. Subido 5→10 (320/combo) para que el full-run de GitHub
+// Actions (maxListings=1500) llegue más profundo en combos con mucho inventario.
+// NO afecta los ticks de Inngest (los topa TICK_MAX=35 ≈ 2 páginas) ni sube el
+// total de requests del full-run (maxListings=1500 ya es el tope global).
+const MAX_PAGES_PER_COMBO = 10;
 
 export interface ProperatiOptions {
   maxListings?: number;
