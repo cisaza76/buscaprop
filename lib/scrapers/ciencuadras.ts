@@ -69,8 +69,8 @@ export interface CiencuadrasOptions {
   /** Slugs de ciudades (sin tildes) que usa Ciencuadras en sitemap. */
   cities?: string[];
   listingTypes?: Array<'venta' | 'arriendo'>;
-  /** Cursor incremental — url_idx global en la queue round-robin. */
-  cursor?: { url_idx?: number };
+  /** Cursor incremental — {sitemap_idx, url_idx} sobre la lista estable de submaps. */
+  cursor?: { sitemap_idx?: number; url_idx?: number };
 }
 
 // ============================================================================
@@ -114,108 +114,120 @@ export async function scrapeCiencuadras(
     return finalize(result, t0);
   }
 
-  // 2. Por cada op-index → encontrar sub-sitemaps por ciudad
-  // 3. Por cada (op, city) sub-sitemap → recolectar listing URLs + lastmod
-  const urlsByCombo: Array<SitemapEntry[]> = [];
+  // 2. Por cada op-index → sub-sitemaps por ciudad. Construimos una LISTA
+  // ESTABLE y ordenada de submaps (op × ciudad). El cursor indexa esta lista
+  // por sitemap_idx + posición dentro (url_idx), igual que Fincaraíz. Es robusto
+  // ante cambios en el contenido de un sitemap: el blast-radius de un drift es
+  // UN submap, no toda la cola nacional (el modelo viejo de url_idx global sobre
+  // una queue round-robin re-armada cada tick se desalineaba al cambiar el
+  // sitemap, saltándose o re-scrapeando inventario).
+  const submaps: string[] = [];
   for (const opIndex of opIndices) {
-    let citySubmaps: string[];
     try {
-      citySubmaps = await findCitySubmaps(opIndex, cities);
+      const citySubmaps = await findCitySubmaps(opIndex, cities);
+      submaps.push(...citySubmaps);
     } catch (err) {
       result.errors.push({
         url: opIndex,
         stage: 'discovery',
         message: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+  submaps.sort(); // orden determinístico entre ticks.
+
+  // 3. Iteración cursor-aware desde {sitemap_idx, url_idx}. Cada submap se
+  // carga on-demand (no todos a la vez).
+  const startSitemapIdx = opts.cursor?.sitemap_idx ?? 0;
+  let startUrlIdx = opts.cursor?.url_idx ?? 0;
+
+  const items: ScrapedProperty[] = [];
+  const seen = new Set<string>();
+  let nextSitemapIdx = startSitemapIdx;
+  let nextUrlIdx = startUrlIdx;
+  let skippedByCache = 0;
+
+  outer: for (let sIdx = startSitemapIdx; sIdx < submaps.length; sIdx++) {
+    const sitemapUrl = submaps[sIdx];
+    let entries: SitemapEntry[];
+    try {
+      entries = await collectListingEntries(sitemapUrl);
+    } catch (err) {
+      result.errors.push({
+        url: sitemapUrl,
+        stage: 'discovery',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      nextSitemapIdx = sIdx + 1;
+      nextUrlIdx = 0;
+      startUrlIdx = 0;
       continue;
     }
-    for (const sub of citySubmaps) {
+    result.discovered += entries.length;
+
+    // Cache-by-lastmod: lookahead dentro de este submap (limita el .in() a un
+    // tamaño razonable). 5x maxListings de buffer por si la mayoría hit cache.
+    const lookahead = entries.slice(startUrlIdx, startUrlIdx + maxListings * 5);
+    const toFetch = await filterUrlsToScrape('ciencuadras', lookahead);
+    const fetchSet = new Set(toFetch.map((e) => e.url));
+    const lookaheadEnd = startUrlIdx + lookahead.length;
+
+    for (let uIdx = startUrlIdx; uIdx < entries.length; uIdx++) {
+      if (items.length >= maxListings) {
+        nextSitemapIdx = sIdx;
+        nextUrlIdx = uIdx;
+        break outer;
+      }
+      const entry = entries[uIdx];
+      if (seen.has(entry.url)) continue;
+      seen.add(entry.url);
+
+      // Cache hit dentro de la ventana de lookahead → skip sin fetchear.
+      if (uIdx < lookaheadEnd && !fetchSet.has(entry.url)) {
+        skippedByCache++;
+        continue;
+      }
+
+      let html: string;
       try {
-        const entries = await collectListingEntries(sub);
-        if (entries.length > 0) urlsByCombo.push(entries);
+        html = await fetchText(entry.url, { portal: 'ciencuadras' });
+        result.fetched++;
       } catch (err) {
         result.errors.push({
-          url: sub,
-          stage: 'discovery',
+          url: entry.url,
+          stage: 'fetch',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      try {
+        const item = parseCiencuadrasListing(entry.url, html);
+        if (item) {
+          if (entry.lastmod) item.source_lastmod = entry.lastmod;
+          items.push(item);
+          result.parsed++;
+        }
+      } catch (err) {
+        result.errors.push({
+          url: entry.url,
+          stage: 'parse',
           message: err instanceof Error ? err.message : String(err),
         });
       }
     }
-  }
-
-  // 4. Round-robin: tomamos 1 URL de cada combo para diversidad geográfica.
-  const queue: SitemapEntry[] = roundRobinFlatten(urlsByCombo);
-  result.discovered = queue.length;
-
-  // 4b. Cache-by-lastmod: pre-cargar el cache para una ventana de lookahead.
-  // Usamos 5x maxListings como buffer — si la mayoría de URLs hit cache,
-  // necesitamos mirar varias adelante para juntar maxListings reales a
-  // fetchear. En el peor caso (todas cacheadas), el tick simplemente avanza
-  // el cursor sin fetchear nada — eso es exactamente lo que queremos.
-  const startIdx = opts.cursor?.url_idx ?? 0;
-  const lookahead = queue.slice(startIdx, startIdx + maxListings * 5);
-  const toFetch = await filterUrlsToScrape('ciencuadras', lookahead);
-  const fetchSet = new Set(toFetch.map((e) => e.url));
-  const lookaheadEnd = startIdx + lookahead.length;
-
-  // 5. Detail-fetch + parse hasta llenar maxListings (cursor-aware).
-  const items: ScrapedProperty[] = [];
-  const seen = new Set<string>();
-  let skippedByCache = 0;
-  let nextIdx = startIdx;
-  for (let i = startIdx; i < queue.length; i++) {
-    const entry = queue[i];
-    if (items.length >= maxListings) {
-      nextIdx = i;
-      break;
-    }
-    nextIdx = i + 1;
-    if (seen.has(entry.url)) continue;
-    seen.add(entry.url);
-
-    // Cache hit: si la URL está dentro del lookahead pre-cargado y el filtro
-    // dijo que NO necesita refresh, skipear sin fetchear.
-    if (i < lookaheadEnd && !fetchSet.has(entry.url)) {
-      skippedByCache++;
-      continue;
-    }
-
-    let html: string;
-    try {
-      html = await fetchText(entry.url, { portal: 'ciencuadras' });
-      result.fetched++;
-    } catch (err) {
-      result.errors.push({
-        url: entry.url,
-        stage: 'fetch',
-        message: err instanceof Error ? err.message : String(err),
-      });
-      continue;
-    }
-    try {
-      const item = parseCiencuadrasListing(entry.url, html);
-      if (item) {
-        // Capturar el lastmod del sitemap para que el próximo tick pueda
-        // decidir si re-scrapear o no.
-        if (entry.lastmod) item.source_lastmod = entry.lastmod;
-        items.push(item);
-        result.parsed++;
-      }
-    } catch (err) {
-      result.errors.push({
-        url: entry.url,
-        stage: 'parse',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
+    nextSitemapIdx = sIdx + 1;
+    nextUrlIdx = 0;
+    startUrlIdx = 0;
   }
   if (skippedByCache > 0) {
     console.log(`[ciencuadras] cache-by-lastmod: skipped ${skippedByCache} URLs sin cambios`);
   }
 
-  // Cursor: si terminamos toda la queue, reset a 0 (re-escaneo refresca).
-  if (nextIdx >= queue.length) nextIdx = 0;
-  result.nextCursor = { last_url_idx: nextIdx };
+  // Si recorrimos todos los submaps, completamos ciclo → reset a (0,0).
+  if (nextSitemapIdx >= submaps.length) {
+    nextSitemapIdx = 0;
+    nextUrlIdx = 0;
+  }
 
   if (items.length > 0) {
     try {
@@ -233,6 +245,11 @@ export async function scrapeCiencuadras(
       });
     }
   }
+
+  result.nextCursor = {
+    last_sitemap_idx: nextSitemapIdx,
+    last_url_idx: nextUrlIdx,
+  };
 
   return finalize(result, t0);
 }
@@ -280,33 +297,6 @@ function parseSitemapIndex(xml: string): string[] {
   return list.map((s) => s?.loc).filter((u): u is string => typeof u === 'string');
 }
 
-function parseUrlSet(xml: string): string[] {
-  const parser = new XMLParser({ ignoreAttributes: true });
-  const data = parser.parse(xml);
-  const raw = data?.urlset?.url;
-  const list: Array<{ loc?: string }> = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  return list.map((u) => u?.loc).filter((u): u is string => typeof u === 'string');
-}
-
-// Toma URL[0] de combo[0], URL[0] de combo[1], ... URL[0] de combo[N-1],
-// luego URL[1] de combo[0], etc. Resultado: cantidad balanceada por combo.
-function roundRobinFlatten<T>(buckets: T[][]): T[] {
-  const out: T[] = [];
-  if (buckets.length === 0) return out;
-  let pos = 0;
-  let added = true;
-  while (added) {
-    added = false;
-    for (const b of buckets) {
-      if (pos < b.length) {
-        out.push(b[pos]);
-        added = true;
-      }
-    }
-    pos++;
-  }
-  return out;
-}
 
 // ============================================================================
 // PARSER DE DETAIL PAGE (Product JSON-LD)

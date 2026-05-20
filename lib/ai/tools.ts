@@ -514,7 +514,7 @@ export async function executeTool(
       case 'fetchPropertyById':
         return { result: await runFetchPropertyById(input), isError: false };
       case 'scheduleVisit':
-        return { result: runScheduleVisit(input), isError: false };
+        return { result: await runScheduleVisit(input, ctx), isError: false };
       case 'recordUserPreferences':
         return await runRecordUserPreferences(input, ctx);
       case 'requestContact':
@@ -974,21 +974,33 @@ function runSimulateCredit(input: Record<string, unknown>): string {
   return JSON.stringify(result, null, 2);
 }
 
-function runScheduleVisit(input: Record<string, unknown>): string {
+async function runScheduleVisit(
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext
+): Promise<string> {
   const propertyId = input.property_id as string | undefined;
   const when = (input.preferred_when as string) ?? 'no especificado';
   const method = (input.contact_method as string) ?? 'whatsapp';
-  if (!propertyId) return 'Falta property_id.';
-  // Phase 7B: persistir esto en una tabla `visit_requests` y notificar al agente.
-  // MVP: solo confirmamos que registramos la intención.
+  if (!propertyId) return JSON.stringify({ registered: false, error: 'Falta property_id.' });
+
+  // Persiste la intención en visit_requests y notifica (best-effort) al asesor.
+  const { createVisitRequest } = await import('@/lib/ai/visits');
+  const visit = await createVisitRequest({
+    conversationId: ctx.conversationId,
+    propertyId,
+    preferredWhen: when,
+    contactMethod: method,
+  });
+
   return JSON.stringify({
     registered: true,
+    visit_request_id: visit.id,
     property_id: propertyId,
     preferred_when: when,
     contact_method: method,
     next_step:
-      'Intención de visita registrada. NO prometas tiempo de contacto exacto — di ' +
-      '"su solicitud quedó registrada y coordinaremos visita en cuanto tengamos ' +
-      'un asesor disponible". El handoff humano todavía no es inmediato.',
+      'Solicitud de visita registrada y notificada al equipo. NO prometas tiempo de ' +
+      'contacto exacto — di "su solicitud quedó registrada y coordinaremos la visita en ' +
+      'cuanto un asesor esté disponible". El handoff humano todavía no es inmediato.',
   });
 }

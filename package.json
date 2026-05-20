@@ -5,7 +5,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321 NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-dummy npm run test:parsers",
+    "test:parsers": "tsx scripts/test-ciencuadras-parser.ts && tsx scripts/test-m2-parser.ts",
+    "check:scrapers": "tsx scripts/check-scraper-health.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.93.0",
