@@ -1,0 +1,37 @@
+name: CI (typecheck + parser tests)
+
+# Gate de calidad en cada push/PR. Dos chequeos herméticos (sin secretos):
+#   - typecheck: tsc --noEmit  → atrapa errores de tipos en todo el repo
+#   - test:      smoke tests de parsers contra fixtures locales
+#
+# Nota: lint (ESLint) todavía no está configurado en el repo. Cuando se agregue
+# eslint-config-next + un pase de limpieza, sumar un step "npm run lint" aquí.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Parser smoke tests
+        run: npm test

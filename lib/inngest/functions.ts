@@ -28,6 +28,9 @@ export const scrapeFincaraizTick = inngest.createFunction(
   {
     id: 'scrape-fincaraiz-tick',
     name: 'Scrape Fincaraíz (incremental)',
+    // limit:1 → un solo tick a la vez. Evita que un tick lento (ej pausa 403 de
+    // 10min) deje correr el siguiente y produzca una race en updateCursor.
+    concurrency: { limit: 1 },
     triggers: [{ cron: 'TZ=America/Bogota */30 * * * *' }],
   },
   async ({ step }) => {
@@ -68,6 +71,7 @@ export const scrapeCiencuadrasTick = inngest.createFunction(
   {
     id: 'scrape-ciencuadras-tick',
     name: 'Scrape Ciencuadras (incremental)',
+    concurrency: { limit: 1 },
     triggers: [{ cron: 'TZ=America/Bogota */30 * * * *' }],
   },
   async ({ step }) => {
@@ -76,12 +80,16 @@ export const scrapeCiencuadrasTick = inngest.createFunction(
     const result = await step.run('scrape', () =>
       scrapeCiencuadras({
         maxListings: TICK_MAX,
-        cursor: { url_idx: cursor.last_url_idx },
+        cursor: {
+          sitemap_idx: cursor.last_sitemap_idx,
+          url_idx: cursor.last_url_idx,
+        },
       })
     );
 
     await step.run('save-cursor', () =>
       updateCursor('ciencuadras', {
+        last_sitemap_idx: result.nextCursor?.last_sitemap_idx ?? 0,
         last_url_idx: result.nextCursor?.last_url_idx ?? 0,
         total_processed: cursor.total_processed + result.parsed,
         total_upserted: cursor.total_upserted + result.upserted,
@@ -104,6 +112,7 @@ export const scrapeMetroCuadradoTick = inngest.createFunction(
   {
     id: 'scrape-metrocuadrado-tick',
     name: 'Scrape MetroCuadrado (incremental)',
+    concurrency: { limit: 1 },
     triggers: [{ cron: 'TZ=America/Bogota 0 * * * *' }], // cada hora
   },
   async ({ step }) => {
@@ -140,6 +149,7 @@ export const scrapeProperatiTick = inngest.createFunction(
   {
     id: 'scrape-properati-tick',
     name: 'Scrape Properati (incremental)',
+    concurrency: { limit: 1 },
     triggers: [{ cron: 'TZ=America/Bogota 30 * * * *' }], // cada hora a la media
   },
   async ({ step }) => {

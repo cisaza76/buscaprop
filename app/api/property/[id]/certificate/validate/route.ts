@@ -7,25 +7,62 @@
 // Uso desde el browser: convertir el File a base64 con FileReader.
 // Tamaño max razonable: 5 MB de PDF (después del base64 ≈ 7 MB de body).
 //
-// SEGURIDAD: este endpoint no tiene auth de role hoy. En producción debería
-// requerir que el caller sea un agente dueño de la propiedad. Para MVP,
-// rate limit por IP + property_id.
+// SEGURIDAD: POST requiere JWT Supabase válido (Authorization: Bearer <token>).
+// Las properties son listings scrapeados públicos (no pertenecen a una agencia),
+// así que NO existe un "dueño" contra quién validar ownership hoy; el control
+// realista es auth + rate limit por usuario+property para frenar subidas masivas
+// de certificados fraudulentos. GET queda público (solo lectura, no muta).
 
 import { NextResponse, type NextRequest } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { ingestCertificate } from '@/lib/certificates/repository';
+import { checkRateLimit } from '@/lib/ai/conversation';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB
+const UPLOADS_PER_HOUR = 5; // por usuario + property
+
+async function getAuthenticatedUserId(req: NextRequest): Promise<string | null> {
+  const auth = req.headers.get('authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+  const token = auth.slice('Bearer '.length).trim();
+  if (!token) return null;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) return null;
+  const client = createClient(url, anon);
+  const { data, error } = await client.auth.getUser(token);
+  if (error || !data?.user?.id) return null;
+  return data.user.id;
+}
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Auth gate — sin JWT válido no se aceptan subidas de certificados.
+  const userId = await getAuthenticatedUserId(request);
+  if (!userId) {
+    return NextResponse.json(
+      { ok: false, error: 'Unauthorized — login required' },
+      { status: 401 }
+    );
+  }
+
   const { id } = await params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
     return NextResponse.json({ ok: false, error: 'id debe ser UUID' }, { status: 400 });
+  }
+
+  // Rate limit por usuario + property: frena subidas masivas / spam.
+  const rl = checkRateLimit(`cert:${userId}:${id}`, UPLOADS_PER_HOUR, 3_600_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { ok: false, error: `Demasiadas subidas para esta propiedad. Máx ${UPLOADS_PER_HOUR}/hora.` },
+      { status: 429 }
+    );
   }
 
   let body: { pdf_base64?: string };

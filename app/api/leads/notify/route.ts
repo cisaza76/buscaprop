@@ -17,12 +17,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { timingSafeEqual } from 'node:crypto';
+import { sendEmail } from '@/lib/notify/email';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 const FROM = 'BuscaProp <leads@buscaprop.co>';
-const RESEND_URL = 'https://api.resend.com/emails';
 const APP_BASE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://buscaprop.co';
 const MAX_VISITS = 5;
 const MAX_OPENED = 8;
@@ -111,35 +111,20 @@ export async function POST(req: NextRequest) {
   });
 
   const to = process.env.LEADS_NOTIFY_TO;
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!to || !apiKey) {
-    console.error('[leads/notify] missing LEADS_NOTIFY_TO or RESEND_API_KEY');
-    return NextResponse.json(
-      { ok: false, error: 'Missing LEADS_NOTIFY_TO or RESEND_API_KEY' },
-      { status: 500 }
-    );
+  if (!to) {
+    console.error('[leads/notify] missing LEADS_NOTIFY_TO');
+    return NextResponse.json({ ok: false, error: 'Missing LEADS_NOTIFY_TO' }, { status: 500 });
   }
 
-  const sent = await fetch(RESEND_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from: FROM, to: [to], subject, html, text }),
-  });
-
+  const sent = await sendEmail({ to, from: FROM, subject, html, text });
   if (!sent.ok) {
-    const errBody = await sent.text();
-    console.error('[leads/notify] Resend error', sent.status, errBody);
     return NextResponse.json(
-      { ok: false, error: 'Resend failed', status: sent.status },
+      { ok: false, error: sent.error ?? 'Email failed', status: sent.status },
       { status: 502 }
     );
   }
 
-  const body = (await sent.json()) as { id?: string };
-  return NextResponse.json({ ok: true, resend_id: body.id, lead_id: leadId });
+  return NextResponse.json({ ok: true, resend_id: sent.id, lead_id: leadId });
 }
 
 // ============================================================================
