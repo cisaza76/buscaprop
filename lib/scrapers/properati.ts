@@ -38,18 +38,41 @@ export const PROPERATI_UA =
   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 BuscaProp/1.0 ' +
   '(+contacto@buscaprop.co)';
 
-// Slugs verificados en homepage recon. Los demás puede que no existan.
+// Ubicaciones de Properati. Todas validadas vía fetch real (apartamento/venta
+// devuelve cards). OJO: el slug NO es uniforme — adivinar falla seguido
+// (bucaramanga-santander, pereira-risaralda, caldas-colombia, santander-colombia
+// dan 404). Los slugs a nivel DEPARTAMENTO ({depto}-colombia) capturan el
+// long-tail de municipios, no solo capitales. Solapan con las ciudades (Medellín
+// ⊂ Antioquia) pero upsert deduplica el solape (updates, no duplicados).
 const DEFAULT_LOCATIONS = [
+  // Ciudades / D.C. (capitales con paginación profunda propia).
   'bogota-d-c-colombia',
   'medellin-antioquia',
   'cali-valle-del-cauca',
   'barranquilla-atlantico',
   'cartagena-bolivar',
-  // Agregadas tras validar slug vía fetch real (apartamento/venta → 30-32 cards).
-  // OJO: el slug de Properati NO es uniforme {ciudad}-{depto} — validar antes de
-  // sumar más (bucaramanga-santander, pereira-risaralda, etc. dan 404).
-  'manizales-caldas',
+  'manizales-caldas', // Caldas no tiene slug a nivel depto (caldas-colombia → 404).
   'bello-antioquia',
+  // Departamentos con inventario (19 validados de 32). Cobertura nacional.
+  'antioquia-colombia',
+  'atlantico-colombia',
+  'bolivar-colombia',
+  'casanare-colombia',
+  'cauca-colombia',
+  'cesar-colombia',
+  'cordoba-colombia',
+  'cundinamarca-colombia',
+  'guainia-colombia',
+  'guaviare-colombia',
+  'huila-colombia',
+  'la-guajira-colombia',
+  'magdalena-colombia',
+  'meta-colombia',
+  'norte-de-santander-colombia',
+  'quindio-colombia',
+  'risaralda-colombia',
+  'tolima-colombia',
+  'valle-del-cauca-colombia',
 ];
 
 const DEFAULT_TYPES: ProperatiOptions['propertyTypes'] = [
