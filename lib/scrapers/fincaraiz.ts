@@ -182,7 +182,7 @@ export interface FincaraizOptions {
   propertyTypes?: Array<'apartamento' | 'casa' | 'apartaestudio' | 'oficina' | 'lote'>;
   listingTypes?: Array<'venta' | 'alquiler'>;
   /** Cursor de scraping incremental — para reanudar desde última posición. */
-  cursor?: { sitemap_idx?: number; url_idx?: number };
+  cursor?: { sitemap_idx?: number; url_idx?: number; cycle?: number };
 }
 
 export async function scrapeFincaraiz(
@@ -237,16 +237,21 @@ export async function scrapeFincaraiz(
     return finalize(result, t0);
   }
 
-  // 2. Cursor-aware iteration: empezar desde {sitemap_idx, url_idx} guardado.
-  // Cargar cada child sitemap on-demand (no todos a la vez) — para Inngest
-  // que procesa chunks pequeños.
+  // 2. Cursor-aware iteration con ventana de drenaje por ciclo.
+  //    url_idx es índice ABSOLUTO en entries; en el ciclo C cada sitemap solo
+  //    drena la ventana [C·CAP, C·CAP+CAP). El sitemap de reanudación arranca en
+  //    el url_idx guardado (mitad de ventana); los demás en C·CAP. El avance del
+  //    cursor lo decide advanceFincaraizCursor. Cargamos cada sitemap on-demand.
+  const CAP = FINCARAIZ_CAP;
   const startSitemapIdx = opts.cursor?.sitemap_idx ?? 0;
-  let startUrlIdx = opts.cursor?.url_idx ?? 0;
+  const startUrlIdx = opts.cursor?.url_idx ?? 0;
+  const cycle = opts.cursor?.cycle ?? 0;
 
   const items: ScrapedProperty[] = [];
   const seen = new Set<string>();
   let nextSitemapIdx = startSitemapIdx;
   let nextUrlIdx = startUrlIdx;
+  let nextCycle = cycle;
   let completedFullCycle = false;
 
   let skippedByCache = 0;
@@ -262,24 +267,38 @@ export async function scrapeFincaraiz(
         stage: 'discovery',
         message: err instanceof Error ? err.message : String(err),
       });
+      // En un error de sitemap avanzamos al siguiente, que arranca en el inicio
+      // de ventana del ciclo actual.
       nextSitemapIdx = sIdx + 1;
-      nextUrlIdx = 0;
-      startUrlIdx = 0;
+      nextUrlIdx = cycle * CAP;
       continue;
     }
     result.discovered += entries.length;
 
-    // Cache-by-lastmod: pre-cargar para una ventana de lookahead dentro
-    // de este sitemap. Limita el .in() a un tamaño razonable (~175 URLs).
-    const lookahead = entries.slice(startUrlIdx, startUrlIdx + maxListings * 5);
+    // Ventana de drenaje de este sitemap en el ciclo actual. El sitemap de
+    // reanudación parte del url_idx guardado; los demás del inicio de ventana.
+    const windowStart = sIdx === startSitemapIdx ? startUrlIdx : cycle * CAP;
+    const windowEnd = Math.min(cycle * CAP + CAP, entries.length);
+
+    // Cache-by-lastmod: pre-cargar la ventana completa (≤ CAP URLs) de una vez.
+    const lookahead = entries.slice(windowStart, windowEnd);
     const toFetch = await filterUrlsToScrape('fincaraiz', lookahead);
     const fetchSet = new Set(toFetch.map((e) => e.url));
-    const lookaheadEnd = startUrlIdx + lookahead.length;
+    const lookaheadEnd = windowEnd;
 
-    for (let uIdx = startUrlIdx; uIdx < entries.length; uIdx++) {
+    for (let uIdx = windowStart; uIdx < windowEnd; uIdx++) {
       if (items.length >= maxListings) {
-        nextSitemapIdx = sIdx;
-        nextUrlIdx = uIdx;
+        // Presupuesto del tick agotado a mitad de ventana → reanudar aquí.
+        const adv = advanceFincaraizCursor(
+          { sitemap_idx: sIdx, url_idx: windowStart, cycle },
+          entries.length,
+          childSitemaps.length,
+          uIdx - windowStart,
+          CAP
+        );
+        nextSitemapIdx = adv.sitemap_idx;
+        nextUrlIdx = adv.url_idx;
+        nextCycle = adv.cycle;
         break outer;
       }
       const entry = entries[uIdx];
@@ -319,21 +338,26 @@ export async function scrapeFincaraiz(
         });
       }
     }
-    nextSitemapIdx = sIdx + 1;
-    nextUrlIdx = 0;
-    startUrlIdx = 0;
+    // Ventana de este sitemap drenada → avanzar. advanceFincaraizCursor decide
+    // si pasa al siguiente sitemap (mismo ciclo) o cierra ciclo y envuelve a 0.
+    const adv = advanceFincaraizCursor(
+      { sitemap_idx: sIdx, url_idx: windowStart, cycle },
+      entries.length,
+      childSitemaps.length,
+      windowEnd - windowStart,
+      CAP
+    );
+    nextSitemapIdx = adv.sitemap_idx;
+    nextUrlIdx = adv.url_idx;
+    nextCycle = adv.cycle;
   }
   if (skippedByCache > 0) {
     console.log(`[fincaraiz] cache-by-lastmod: skipped ${skippedByCache} URLs sin cambios`);
   }
 
-  // Si recorrimos todos los sitemaps sin llenar maxListings, completamos ciclo.
-  // El cursor vuelve a {0, 0} para reiniciar (refresca data ya capturada).
-  if (nextSitemapIdx >= childSitemaps.length) {
-    nextSitemapIdx = 0;
-    nextUrlIdx = 0;
-    completedFullCycle = true;
-  }
+  // Si el avance cerró el ciclo (cycle incrementado), lo registramos para que el
+  // caller pueda loguearlo. El wrap a sitemap 0 ya lo hizo advanceFincaraizCursor.
+  completedFullCycle = nextCycle > cycle;
 
   // 3. Upsert idempotente.
   if (items.length > 0) {
@@ -356,13 +380,14 @@ export async function scrapeFincaraiz(
   result.nextCursor = {
     last_sitemap_idx: nextSitemapIdx,
     last_url_idx: nextUrlIdx,
+    last_cycle: nextCycle,
   };
   if (completedFullCycle) {
     // Marcamos en el message para que el caller lo registre.
     result.errors.push({
       url: '<cursor>',
       stage: 'discovery',
-      message: 'INFO: completed full cycle, cursor reset to (0, 0)',
+      message: `INFO: completed full cycle ${cycle}, advancing to cycle ${nextCycle} (sitemap 0)`,
     });
   }
 
@@ -383,6 +408,68 @@ function finalize(result: ScrapeResult, t0: number): ScrapeResult {
 // apartamento entero antes de llegar a casa/oficina/lote.
 const TYPE_SORT_ORDER = ['apartamento', 'casa', 'oficina', 'lote', 'apartaestudio'];
 const OP_SORT_ORDER = ['venta', 'alquiler'];
+
+// Versión del orden de sitemaps. SÚBELA cada vez que cambie orderChildSitemaps
+// o sus inputs (TYPE_SORT_ORDER, OP_SORT_ORDER, DEFAULT_DEPARTMENTS): el cursor
+// guarda sitemap_idx como índice posicional, así que un reorden lo invalida.
+// cursor.ts compara esta versión contra la guardada y, si difieren, resetea
+// sitemap_idx/url_idx a 0 preservando+incrementando cycle → migración
+// automática post-deploy, sin acción manual.
+//   v0 = orden alfabético histórico (pre-Sección 1)
+//   v1 = orden determinista (op, dept, type) con TYPE_SORT_ORDER (Sección 1)
+export const SITEMAP_ORDER_VERSION = 1;
+
+// URLs por sitemap por ciclo. Con TICK_MAX=35 (Inngest) una ventana de 200 se
+// llena en ~6 ticks y *ahí* rota al siguiente sitemap; así ningún sitemap
+// gigante (apartamento-bogotá) monopoliza el crawl y todos los tipos avanzan
+// en paralelo a lo largo de los ciclos.
+export const FINCARAIZ_CAP = 200;
+
+// Posición del crawl incremental. url_idx es índice ABSOLUTO en el array de
+// entries del sitemap actual; cycle define la ventana de drenaje
+// [cycle·CAP, cycle·CAP+CAP) — ver scrapeFincaraiz / advanceFincaraizCursor.
+export interface FincaraizCursor {
+  sitemap_idx: number;
+  url_idx: number;
+  cycle: number;
+}
+
+/**
+ * Transición pura del cursor tras consumir `consumed` URLs del sitemap actual.
+ * Es la fuente de verdad del algoritmo de avance (testeable sin red); el loop
+ * de scrapeFincaraiz la usa en sus dos puntos de salida (presupuesto agotado /
+ * ventana drenada).
+ *
+ *   - Si la ventana [cycle·CAP, cycle·CAP+CAP) del sitemap no se agotó →
+ *     seguimos en el mismo sitemap, avanzando url_idx.
+ *   - Si se agotó → pasamos al siguiente sitemap, que arranca en el inicio de
+ *     ventana del ciclo actual (cycle·CAP).
+ *   - Si era el último sitemap → cerramos ciclo: cycle++ y volvemos a sitemap 0
+ *     con la ventana del nuevo ciclo.
+ *
+ * Un sitemap con menos entries que cycle·CAP queda con ventana vacía y se salta
+ * solo (consumed=0 → newUrlIdx ≥ windowEnd) — eso da cobertura proporcional:
+ * los tipos chicos se agotan y ceden presupuesto a los grandes.
+ */
+export function advanceFincaraizCursor(
+  cur: FincaraizCursor,
+  entriesLength: number,
+  sitemapCount: number,
+  consumed: number,
+  cap: number = FINCARAIZ_CAP
+): FincaraizCursor {
+  const windowEnd = Math.min(cur.cycle * cap + cap, entriesLength);
+  const newUrlIdx = cur.url_idx + Math.max(0, consumed);
+  if (newUrlIdx < windowEnd) {
+    return { sitemap_idx: cur.sitemap_idx, url_idx: newUrlIdx, cycle: cur.cycle };
+  }
+  const nextSitemap = cur.sitemap_idx + 1;
+  if (nextSitemap >= sitemapCount) {
+    const nextCycle = cur.cycle + 1;
+    return { sitemap_idx: 0, url_idx: nextCycle * cap, cycle: nextCycle };
+  }
+  return { sitemap_idx: nextSitemap, url_idx: cur.cycle * cap, cycle: cur.cycle };
+}
 
 // Rank (op, dept, type) de un sitemap. Componente no reconocido → Infinity
 // para que caiga al final de forma estable sin romper el índice.
