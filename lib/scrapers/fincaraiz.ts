@@ -375,6 +375,53 @@ function finalize(result: ScrapeResult, t0: number): ScrapeResult {
   return result;
 }
 
+// Orden determinista de tipos para el sort de sitemaps. NO es alfabético a
+// propósito: apartamento/casa/oficina/lote van primero (tienen enum propia en
+// PropertyType) y apartaestudio al final (se pliega en apartamento via
+// mapPropertyType). Agrupar así los 5 tipos por bloque dept+op hace que los
+// primeros sitemaps de cada bloque toquen todos los tipos, en vez de drenar
+// apartamento entero antes de llegar a casa/oficina/lote.
+const TYPE_SORT_ORDER = ['apartamento', 'casa', 'oficina', 'lote', 'apartaestudio'];
+const OP_SORT_ORDER = ['venta', 'alquiler'];
+
+// Rank (op, dept, type) de un sitemap. Componente no reconocido → Infinity
+// para que caiga al final de forma estable sin romper el índice.
+function sitemapRank(url: string, departments: string[]): [number, number, number] {
+  const op = OP_SORT_ORDER.findIndex((o) => url.includes(`-en-${o}-`));
+  const dept = departments.findIndex((d) => url.endsWith(`-${d}.xml`));
+  const type = TYPE_SORT_ORDER.findIndex((t) =>
+    url.includes(`cde-sitemap-listings-${t}-en-`)
+  );
+  return [
+    op === -1 ? Infinity : op,
+    dept === -1 ? Infinity : dept,
+    type === -1 ? Infinity : type,
+  ];
+}
+
+/**
+ * Ordena los child sitemaps de forma DETERMINISTA por (operación, departamento,
+ * tipo). Esto es crítico, no cosmético: el cursor de scraping guarda
+ * `sitemap_idx` como índice posicional en este array. Si dependiéramos del
+ * orden de llegada del XML de fincaraiz (que puede cambiar entre corridas),
+ * `sitemap_idx` apuntaría a un sitemap distinto al reanudar → cursor corrupto.
+ * Por eso imponemos un orden total explícito y reproducible.
+ *
+ * El sort no agrega ni quita elementos: si falta un tipo en un bloque dept+op,
+ * el array sigue siendo contiguo (sin gaps), solo con un sitemap menos.
+ */
+export function orderChildSitemaps(urls: string[], departments: string[]): string[] {
+  return [...urls].sort((a, b) => {
+    const ra = sitemapRank(a, departments);
+    const rb = sitemapRank(b, departments);
+    for (let i = 0; i < 3; i++) {
+      if (ra[i] !== rb[i]) return ra[i] - rb[i];
+    }
+    // Tie-break alfabético → orden total estable aunque el rank empate.
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+
 async function discoverChildSitemaps(filters: {
   departments: string[];
   propertyTypes: string[];
@@ -386,7 +433,7 @@ async function discoverChildSitemaps(filters: {
   const raw = data?.sitemapindex?.sitemap;
   const list: Array<{ loc?: string }> = Array.isArray(raw) ? raw : raw ? [raw] : [];
 
-  return list
+  const matched = list
     .map((s) => s?.loc)
     .filter((u): u is string => typeof u === 'string')
     .filter((u) => {
@@ -398,6 +445,9 @@ async function discoverChildSitemaps(filters: {
       const matchesDept = filters.departments.some((d) => u.endsWith(`-${d}.xml`));
       return matchesType && matchesOp && matchesDept;
     });
+
+  // Orden determinista — ver orderChildSitemaps (el cursor depende de él).
+  return orderChildSitemaps(matched, filters.departments);
 }
 
 async function collectListingEntries(sitemapUrl: string): Promise<SitemapEntry[]> {
