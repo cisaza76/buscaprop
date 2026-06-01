@@ -19,11 +19,6 @@ const BLOCK_RATE_THRESHOLD = 0.2; // 20% de 403/429
 const MIN_ATTEMPTS_FOR_RATE = 20; // no alertar con muestra chica
 const STALE_HOURS = 3;
 
-interface AttemptRow {
-  portal: string | null;
-  status_code: number | null;
-}
-
 interface CursorRow {
   portal: string;
   last_run_at: string | null;
@@ -42,37 +37,55 @@ async function main() {
   const problems: string[] = [];
 
   // ── 1. Tasa de bloqueo (403/429) por portal ──────────────────────────────
+  // Usamos count exacto por portal en vez de traer las filas: Supabase tiene
+  // max-rows=1000 por defecto, así que un select de todas las filas se trunca
+  // silenciosamente y oculta los portales con menos volumen (ej. properati
+  // queda fuera del top-1000 que dominan fincaraiz/ciencuadras). Los counts
+  // server-side no tienen ese límite.
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3_600_000).toISOString();
-  const { data: attempts, error: attErr } = await sb
-    .from('scrape_attempts')
-    .select('portal, status_code')
-    .gte('created_at', since)
-    .limit(100_000);
 
-  if (attErr) {
-    console.warn(`⚠️  No pude leer scrape_attempts (${attErr.message}). ¿Migración 016 aplicada?`);
+  // Lista de portales a auditar: los configurados en scraper_cursor. Robusto
+  // ante portales nuevos sin tener que hardcodear.
+  const { data: portalRows, error: portalErr } = await sb
+    .from('scraper_cursor')
+    .select('portal')
+    .order('portal');
+
+  if (portalErr) {
+    console.warn(`⚠️  No pude leer scraper_cursor (${portalErr.message}).`);
   } else {
-    const byPortal = new Map<string, { total: number; blocked: number }>();
-    for (const a of (attempts ?? []) as AttemptRow[]) {
-      const p = a.portal ?? 'unknown';
-      const agg = byPortal.get(p) ?? { total: 0, blocked: 0 };
-      agg.total++;
-      if (a.status_code === 403 || a.status_code === 429) agg.blocked++;
-      byPortal.set(p, agg);
-    }
+    const portals = (portalRows ?? []).map((r) => (r as { portal: string }).portal);
     console.log(`\n━━ Tasa de bloqueo (últimas ${LOOKBACK_HOURS}h) ━━`);
-    if (byPortal.size === 0) {
-      console.log('  (sin intentos registrados en la ventana)');
+    if (portals.length === 0) {
+      console.log('  (sin portales configurados)');
     }
-    for (const [portal, { total, blocked }] of byPortal) {
-      const rate = total > 0 ? blocked / total : 0;
+    for (const portal of portals) {
+      const { count: total, error: totalErr } = await sb
+        .from('scrape_attempts')
+        .select('*', { count: 'exact', head: true })
+        .eq('portal', portal)
+        .gte('created_at', since);
+      if (totalErr) {
+        console.warn(`⚠️  ${portal}: no pude contar attempts (${totalErr.message}). ¿Migración 016 aplicada?`);
+        continue;
+      }
+      const { count: blocked } = await sb
+        .from('scrape_attempts')
+        .select('*', { count: 'exact', head: true })
+        .eq('portal', portal)
+        .gte('created_at', since)
+        .in('status_code', [403, 429]);
+
+      const t = total ?? 0;
+      const b = blocked ?? 0;
+      const rate = t > 0 ? b / t : 0;
       const pct = (rate * 100).toFixed(1);
-      const flag =
-        total >= MIN_ATTEMPTS_FOR_RATE && rate > BLOCK_RATE_THRESHOLD ? '🔴' : '✅';
-      console.log(`  ${flag} ${portal}: ${blocked}/${total} bloqueados (${pct}%)`);
-      if (total >= MIN_ATTEMPTS_FOR_RATE && rate > BLOCK_RATE_THRESHOLD) {
+      const flagged = t >= MIN_ATTEMPTS_FOR_RATE && rate > BLOCK_RATE_THRESHOLD;
+      const flag = flagged ? '🔴' : '✅';
+      console.log(`  ${flag} ${portal}: ${b}/${t} bloqueados (${pct}%)`);
+      if (flagged) {
         problems.push(
-          `${portal}: tasa de bloqueo ${pct}% (>${BLOCK_RATE_THRESHOLD * 100}%) en ${total} intentos`
+          `${portal}: tasa de bloqueo ${pct}% (>${BLOCK_RATE_THRESHOLD * 100}%) en ${t} intentos`
         );
       }
     }
