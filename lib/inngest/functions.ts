@@ -42,6 +42,7 @@ export const scrapeFincaraizTick = inngest.createFunction(
         cursor: {
           sitemap_idx: cursor.last_sitemap_idx,
           url_idx: cursor.last_url_idx,
+          cycle: cursor.last_cycle,
         },
       })
     );
@@ -50,6 +51,7 @@ export const scrapeFincaraizTick = inngest.createFunction(
       updateCursor('fincaraiz', {
         last_sitemap_idx: result.nextCursor?.last_sitemap_idx ?? 0,
         last_url_idx: result.nextCursor?.last_url_idx ?? 0,
+        last_cycle: result.nextCursor?.last_cycle ?? 0,
         total_processed: cursor.total_processed + result.parsed,
         total_upserted: cursor.total_upserted + result.upserted,
         last_run_at: new Date().toISOString(),

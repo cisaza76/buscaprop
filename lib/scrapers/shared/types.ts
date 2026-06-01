@@ -65,6 +65,9 @@ export interface ScraperCursorState {
   last_sitemap_idx?: number;
   last_url_idx?: number;
   last_combo_idx?: number;
+  // Número de ciclo del crawl con ventana CAP (Fincaraíz). Define la ventana de
+  // drenaje [cycle·CAP, cycle·CAP+CAP) de cada sitemap — ver scrapeFincaraiz.
+  last_cycle?: number;
 }
 
 export interface ScrapeError {
