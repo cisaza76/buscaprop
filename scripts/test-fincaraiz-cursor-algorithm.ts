@@ -121,6 +121,40 @@ const r2 = reconcileSitemapOrderVersion(store, 1);
 ok('segundo load no resetea (idempotente)', !r2.didReset);
 eq('cursor intacto en segundo load', r2.cursor, store);
 
+console.log('\n━━ 7. advanceFincaraizCursor con cycle>0 ━━');
+// La ventana del ciclo C es [C·CAP, C·CAP+CAP). Avanzar dentro de ella NO debe
+// cambiar el ciclo; agotarla en el último sitemap SÍ debe incrementarlo.
+// En ambos casos output.cycle ∈ {input.cycle, input.cycle+1}.
+const inCycle = 2; // cycle>0
+// (a) avance dentro de la ventana [400,600) → mismo ciclo
+const stay = advanceFincaraizCursor(
+  { sitemap_idx: 1, url_idx: 400, cycle: inCycle },
+  10_000,
+  50,
+  35,
+  200
+);
+eq('cycle>0: avance dentro de ventana → mismo ciclo', stay, {
+  sitemap_idx: 1,
+  url_idx: 435,
+  cycle: inCycle,
+});
+ok('output.cycle == input.cycle', stay.cycle === inCycle);
+// (b) agotar ventana en el último sitemap → cycle+1
+const wrap = advanceFincaraizCursor(
+  { sitemap_idx: 49, url_idx: 400, cycle: inCycle },
+  10_000,
+  50,
+  200,
+  200
+);
+ok('output.cycle == input.cycle+1 al envolver', wrap.cycle === inCycle + 1, JSON.stringify(wrap));
+ok(
+  'invariante: output.cycle ∈ {input, input+1}',
+  (stay.cycle === inCycle || stay.cycle === inCycle + 1) &&
+    (wrap.cycle === inCycle || wrap.cycle === inCycle + 1)
+);
+
 console.log('\n' + '='.repeat(60));
 if (failures > 0) {
   console.log(`❌ ${failures} aserción(es) fallaron`);
