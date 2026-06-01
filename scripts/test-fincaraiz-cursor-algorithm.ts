@@ -108,12 +108,13 @@ const storedV0 = {
 };
 const r1 = reconcileSitemapOrderVersion(storedV0, 1);
 ok('detecta desfase → didReset=true', r1.didReset);
-eq('reset posición, preserva+incrementa cycle, sube versión', r1.cursor, {
+eq('reset posición + cycle a 0 (no a 1), sube versión', r1.cursor, {
   last_sitemap_idx: 0,
   last_url_idx: 0,
-  last_cycle: 1,
+  last_cycle: 0,
   sitemap_order_version: 1,
 });
+ok('on reorder: cycle → 0 (cubre [0,CAP) de los tipos nuevos)', r1.cursor.last_cycle === 0);
 
 // Round-trip: guardamos el cursor reconciliado y volvemos a cargar → idempotente.
 const store = r1.cursor; // simula la fila persistida en Supabase

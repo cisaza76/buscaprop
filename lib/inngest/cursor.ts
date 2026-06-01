@@ -25,9 +25,10 @@ export interface ScraperCursor {
  * Reconciliación pura del cursor contra la versión de orden de sitemaps del
  * código. Si el cursor se guardó con un orden viejo (versión menor), hay que
  * resetear la posición — sitemap_idx/url_idx apuntan a sitemaps que tras el
- * reorden ya no están en ese índice. Preservamos el avance acumulado
- * incrementando `cycle` (no lo perdemos a 0), de modo que el re-escaneo use la
- * siguiente ventana en vez de repetir exactamente lo ya visto.
+ * reorden ya no están en ese índice. Reseteamos cycle a 0: un reorden remapea
+ * los índices, así que el `cycle` viejo no tiene continuidad; conservarlo haría
+ * que los sitemaps recién alcanzables (casa/oficina/lote) saltaran su ventana
+ * [0,CAP). El cache-by-lastmod hace barato el re-escaneo desde 0.
  *
  * Es pura (sin I/O) para poder testearla; getCursor la aplica y persiste.
  */
@@ -55,7 +56,9 @@ export function reconcileSitemapOrderVersion(
     cursor: {
       last_sitemap_idx: 0,
       last_url_idx: 0,
-      last_cycle: stored.last_cycle + 1,
+      // Reset to cycle 0: re-cover [0,CAP) in new sitemap order
+      // Maintains proportional breadth; cache makes re-scan cheap
+      last_cycle: 0,
       sitemap_order_version: codeVersion,
     },
     didReset: true,
