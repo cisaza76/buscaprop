@@ -28,6 +28,28 @@ for (const u of slugs) {
   console.log(`    →`, s);
 }
 
+// ── Regresión: operación DUAL "arriendo-o-venta" (incidente 2026-06-02) ──
+// Antes devolvían null → el parser caía en masa → loop drenaba sitemaps →
+// storm de Inngest. Dual debe parsear como listing_type='venta'.
+console.log('\n━━ Slug dual (arriendo-o-venta) — regresión ━━');
+let slugFails = 0;
+const assertSlug = (u: string, wantOp: string | null) => {
+  const s = parseCiencuadrasSlug(u);
+  const got = s?.op ?? null;
+  const ok = got === wantOp;
+  console.log(`  ${ok ? '✅' : '❌'} op=${got} (esperado ${wantOp}) ← ${u.split('/').pop()?.slice(0, 55)}`);
+  if (!ok) slugFails++;
+};
+assertSlug('https://www.ciencuadras.com/inmueble/apartamento-en-arriendo-o-venta-en-castropol-medellin-3712345', 'venta');
+assertSlug('https://www.ciencuadras.com/inmueble/casa-en-venta-o-arriendo-en-el-nogal-bogota-3712346', 'venta');
+assertSlug('https://www.ciencuadras.com/inmueble/apartamento-en-arriendo-en-chapinero-bogota-1234567', 'arriendo'); // simple no regresiona
+assertSlug('https://www.ciencuadras.com/inmueble/casa-en-venta-en-casa-blanca-suba-bogota-3091390', 'venta');
+if (slugFails > 0) {
+  console.log(`\n❌ ${slugFails} aserción(es) de slug dual fallaron`);
+  process.exit(1);
+}
+console.log('  ✅ slug dual OK');
+
 // Detail parsing
 console.log('\n━━ Detail page parsing ━━');
 const html = fs.readFileSync(path.join(FIX, 'detail-tuna-alta-venta.html'), 'utf-8');
