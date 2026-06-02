@@ -101,6 +101,15 @@ export async function scrapeCiencuadras(
   const cities = opts.cities ?? DEFAULT_CITIES;
   const listingTypes = opts.listingTypes ?? DEFAULT_OPS!;
 
+  // Tope de fetches reales por corrida (defensa anti-storm). Sin esto, un
+  // sitemap donde la mayoría de listings no parsean (ej. formato nuevo no
+  // soportado) nunca llena `items>=maxListings` y el loop drena el sitemap
+  // entero → timeout de Inngest → reintento desde el mismo cursor → loop
+  // infinito (ver incidente 2026-06-02). Con el tope, el cursor SIEMPRE avanza
+  // ~maxFetchAttempts por tick aunque todo sea null. 4× da margen para que los
+  // fallos de parse no impidan juntar maxListings parseables en el caso normal.
+  const maxFetchAttempts = maxListings * 4;
+
   // 1. Root sitemap → encontrar sub-índices "detalles-inmuebles-{op}"
   let opIndices: string[];
   try {
@@ -146,6 +155,7 @@ export async function scrapeCiencuadras(
   let nextSitemapIdx = startSitemapIdx;
   let nextUrlIdx = startUrlIdx;
   let skippedByCache = 0;
+  let attempted = 0; // fetches reales este tick — bound anti-storm
 
   outer: for (let sIdx = startSitemapIdx; sIdx < submaps.length; sIdx++) {
     const sitemapUrl = submaps[sIdx];
@@ -173,7 +183,9 @@ export async function scrapeCiencuadras(
     const lookaheadEnd = startUrlIdx + lookahead.length;
 
     for (let uIdx = startUrlIdx; uIdx < entries.length; uIdx++) {
-      if (items.length >= maxListings) {
+      // Cortamos por items parseados O por fetches intentados (lo segundo
+      // garantiza avance del cursor aunque casi nada parsee → anti-storm).
+      if (items.length >= maxListings || attempted >= maxFetchAttempts) {
         nextSitemapIdx = sIdx;
         nextUrlIdx = uIdx;
         break outer;
@@ -188,6 +200,7 @@ export async function scrapeCiencuadras(
         continue;
       }
 
+      attempted++;
       let html: string;
       try {
         html = await fetchText(entry.url, { portal: 'ciencuadras' });
@@ -473,11 +486,20 @@ export function parseCiencuadrasSlug(url: string): SlugInfo | null {
   }
   if (!type) return null;
 
-  // Después de "{type}-en-" viene "{op}-en-{hood-y-city}"
+  // Después de "{type}-en-" viene "{op}-en-{hood-y-city}". La operación puede
+  // ser simple ("venta"/"arriendo") o DUAL ("arriendo-o-venta"/"venta-o-arriendo")
+  // — ciencuadras publica muchos listings en venta+arriendo a la vez. Sin esto,
+  // el slug no matcheaba, el parser devolvía null en masa, y el loop drenaba
+  // sitemaps enteros hasta timeoutear (ver incidente 2026-06-02). Alternativas
+  // largas primero para que el regex matchee la dual antes que la simple.
   const afterType = slug.slice(type.length + 4); // +4 = "-en-"
-  const opMatch = afterType.match(/^(venta|arriendo)-en-(.+)$/);
+  const opMatch = afterType.match(
+    /^(arriendo-o-venta|venta-o-arriendo|venta|arriendo)-en-(.+)$/
+  );
   if (!opMatch) return null;
-  const op = opMatch[1] as 'venta' | 'arriendo';
+  // Dual → 'venta' (Buscaprop es buyer-first; el precio de venta es el dato
+  // dominante). Solo 'arriendo' puro queda como arriendo.
+  const op: 'venta' | 'arriendo' = opMatch[1] === 'arriendo' ? 'arriendo' : 'venta';
   const hoodAndCity = opMatch[2];
 
   // Encontrar ciudad como sufijo conocido.
