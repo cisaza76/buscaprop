@@ -1,0 +1,58 @@
+name: Scraper health (cada 2h)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Alerting automático de salud del scraping. Corre check-scraper-health, que
+# sale con código ≠0 si:
+#   - tasa de bloqueo (403/429) > umbral en algún portal (posible ban), o
+#   - algún cursor lleva > umbral sin avanzar (orquestador caído / loop atascado).
+# Si el job FALLA, GitHub notifica por email a los watchers del repo.
+#
+# Por qué existe: el incidente de ciencuadras (2026-06-02) — cursor congelado
+# 14h en un retry-storm — pasó desapercibido porque check-scraper-health solo
+# corría a mano. Con este cron, una congelación de cualquier portal se detecta
+# en ≤2h (el umbral de staleness del script es 3h), no en 14h.
+#
+# Cadencia: cada 2h. El check es una query rápida (~segundos), compute trivial.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '0 */2 * * *' # cada 2h UTC
+  workflow_dispatch: {} # permite correrlo a mano desde la UI
+
+# No encolar checks redundantes: si llega uno mientras corre, cancelar el viejo.
+concurrency:
+  group: scraper-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: check-scrapers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check scraper health
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run check:scrapers
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Scraper health · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Status: \`${{ job.status }}\` (failure ⇒ revisar bloqueo/staleness de algún portal)" >> $GITHUB_STEP_SUMMARY
