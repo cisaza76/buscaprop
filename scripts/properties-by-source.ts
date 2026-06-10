@@ -6,6 +6,22 @@ import dotenv from 'dotenv';
 import path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
 
+// Cuenta exacta robusta: reintenta y FALLA fuerte si el count viene null/error,
+// en vez de coercer a 0 en silencio. Un 0 falso (count-exact transitoriamente
+// fallido sobre el portal más grande) hacía leer "unique=0" como si fuera data
+// — ver reporte 2026-06-10. `build` es un thunk para reconstruir el query en
+// cada reintento.
+async function exactCount(label: string, build: () => any): Promise<number> {
+  let lastErr = 'count was null';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { count, error } = await build();
+    if (!error && count != null) return count as number;
+    lastErr = error?.message ?? 'count was null';
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 300 * attempt));
+  }
+  throw new Error(`exactCount(${label}) falló tras 3 intentos: ${lastErr}`);
+}
+
 async function main() {
   const { createClient } = await import('@supabase/supabase-js');
   const sb = createClient(
@@ -24,26 +40,30 @@ async function main() {
   }> = [];
 
   for (const s of sources) {
-    const [{ count: total }, { count: unique }, { data: latest }] = await Promise.all([
-      sb.from('properties').select('id', { count: 'exact', head: true }).eq('source_portal', s),
+    // Secuencial (no Promise.all): evita saturar la DB con count-exact
+    // concurrentes, que era lo que hacía fallar el conteo del portal grande.
+    const total = await exactCount(`${s}.total`, () =>
+      sb.from('properties').select('id', { count: 'exact', head: true }).eq('source_portal', s)
+    );
+    const unique = await exactCount(`${s}.unique`, () =>
       sb
         .from('properties')
         .select('id', { count: 'exact', head: true })
         .eq('source_portal', s)
-        .eq('is_duplicate', false),
-      sb
-        .from('properties')
-        .select('created_at')
-        .eq('source_portal', s)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+        .eq('is_duplicate', false)
+    );
+    const { data: latest } = await sb
+      .from('properties')
+      .select('created_at')
+      .eq('source_portal', s)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
     rows.push({
       source: s,
-      total: total ?? 0,
-      unique: unique ?? 0,
-      duplicates: (total ?? 0) - (unique ?? 0),
+      total,
+      unique,
+      duplicates: total - unique,
       last_seen: (latest?.created_at as string) ?? null,
     });
   }
