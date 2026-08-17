@@ -419,6 +419,9 @@ export function parseCiencuadrasListing(
     photos.push(heroImage);
   }
 
+  // Contacto: no está en el JSON-LD, sólo en el blob detail-state.
+  const contact = extractCiencuadrasContact(parseCiencuadrasDetailState(html));
+
   return {
     source_portal: 'ciencuadras',
     source_url: effectiveUrl,
@@ -435,7 +438,103 @@ export function parseCiencuadrasListing(
     photos,
     latitude: lat ?? undefined,
     longitude: lng ?? undefined,
+    contact_phone: contact.contact_phone,
+    company_name: contact.company_name,
+    // contact_name se deja vacío a propósito: el portal sólo publica razón
+    // social (realStateName / advisoryName), nunca nombre de persona.
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Contacto
+//
+// El teléfono NO está en el JSON-LD. Vive en un blob de Angular
+// TransferState: <script id="detail-state" type="application/json"> con las
+// comillas escapadas como &q;. Adentro, la ficha cuelga de una key dinámica
+// `detail-property-{path}` con dos sub-objetos que nos interesan:
+//   generalData: whatsAppContact, advisoryPhone, advisorWhatsapp, phoneList[],
+//                advisoryName, allowContact{Whatsapp,Call,Email}
+//   dataStrip:   realStateName (nombre comercial de la inmobiliaria)
+// ─────────────────────────────────────────────────────────────────────────
+
+// Mapa de escape de Angular TransferState. Un solo pase para no
+// des-escapar dos veces (un '&a;q;' literal no debe volverse '"').
+const NG_UNESCAPE: Record<string, string> = {
+  '&a;': '&',
+  '&q;': '"',
+  '&s;': "'",
+  '&l;': '<',
+  '&g;': '>',
+  '&b;': '\\',
+};
+
+export function parseCiencuadrasDetailState(html: string): unknown {
+  const m = html.match(
+    /<script id="detail-state" type="application\/json">([\s\S]*?)<\/script>/
+  );
+  if (!m) return null;
+  const json = m[1].replace(/&[aqslgb];/g, (t) => NG_UNESCAPE[t] ?? t);
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+// Normaliza a celular colombiano en E.164 sin '+': 57 + 3XXXXXXXXX.
+// Devuelve null para fijos (numeración 60X), formatos viejos de 7 dígitos y
+// basura. contact_phone alimenta links wa.me — un fijo daría un link muerto.
+export function normalizeCoMobile(raw: unknown): string | null {
+  if (raw == null) return null;
+  const d = String(raw).replace(/\D/g, '');
+  if (d.length === 10 && d.startsWith('3')) return `57${d}`;
+  if (d.length === 12 && d.startsWith('573')) return d;
+  return null;
+}
+
+interface CiencuadrasContact {
+  contact_phone?: string;
+  company_name?: string;
+}
+
+export function extractCiencuadrasContact(state: unknown): CiencuadrasContact {
+  if (!state || typeof state !== 'object') return {};
+  const key = Object.keys(state as Record<string, unknown>).find((k) =>
+    k.startsWith('detail-property-')
+  );
+  if (!key) return {};
+  const detail = (state as Record<string, any>)[key];
+  if (!detail || typeof detail !== 'object') return {};
+
+  // Ficha caída: el portal responde 200 con {error, message} y sin
+  // generalData en vez de un 404.
+  const g = detail.generalData ?? {};
+  const ds = detail.dataStrip ?? {};
+
+  const company_name: string | undefined = ds.realStateName || g.advisoryName || undefined;
+
+  // Respetar los flags de consentimiento del anunciante: si bloqueó tanto
+  // WhatsApp como llamada, no publicamos su número.
+  if (g.allowContactWhatsapp === false && g.allowContactCall === false) {
+    return { company_name };
+  }
+
+  // Preferir el número del botón de WhatsApp: es el canal que el anunciante
+  // usa para recibir leads. Después los del asesor, y de último la lista
+  // cruda.
+  const direct = [g.whatsAppContact, g.advisorWhatsapp, g.advisoryPhone];
+  for (const cand of direct) {
+    const phone = normalizeCoMobile(cand);
+    if (phone) return { contact_phone: phone, company_name };
+  }
+  for (const entry of Array.isArray(g.phoneList) ? g.phoneList : []) {
+    // type 'C' = celular, 'F' = fijo. isVisible '0' = el anunciante lo
+    // marcó como no publicable.
+    if (entry?.type !== 'C' || String(entry?.isVisible) !== '1') continue;
+    const phone = normalizeCoMobile(entry.phone);
+    if (phone) return { contact_phone: phone, company_name };
+  }
+  return { company_name };
 }
 
 function findProductJsonLd($: cheerio.CheerioAPI): JsonLdProduct | null {
