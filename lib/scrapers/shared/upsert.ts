@@ -7,6 +7,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { dedupeHash } from './dedupe';
+import { normalizeSupabaseUrl } from '../../supabase-url';
 import { canonicalCity, cleanLeftoverNeighborhood } from './normalize';
 import type { ScrapedProperty } from './types';
 
@@ -21,8 +22,36 @@ function getServerClient(): SupabaseClient {
         'definidas en .env.local (lado server, NUNCA exponer al cliente)'
     );
   }
-  cachedClient = createClient(url, key, { auth: { persistSession: false } });
+  // Normalizado: un secret con sufijo '/rest/v1/' rompía TODAS las llamadas
+  // con PGRST125 — el cron escribió 0 filas durante semanas. Ver
+  // lib/supabase-url.ts.
+  cachedClient = createClient(normalizeSupabaseUrl(url), key, {
+    auth: { persistSession: false },
+  });
   return cachedClient;
+}
+
+/**
+ * ¿El error dice que la columna no existe (migración sin aplicar), o es otra
+ * cosa (red, path inválido, gateway caído)?
+ *
+ * Distinguirlo es crítico: `detectAvailableColumns` trataba CUALQUIER error
+ * como "la columna no existe" y cacheaba esa conclusión para todo el proceso,
+ * así que un fallo de transporte hacía que el upsert descartara
+ * contact_phone / dedup_hash / source_lastmod en silencio, fila tras fila.
+ */
+export function isMissingColumnError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as Record<string, unknown>;
+  const code = String(o.code ?? '');
+  // 42703 = undefined_column (Postgres). PGRST204 = la columna no está en el
+  // schema cache de PostgREST.
+  if (code === '42703' || code === 'PGRST204') return true;
+  const msg = String(o.message ?? '');
+  return (
+    /column .* does not exist/i.test(msg) ||
+    /could not find the '.*' column/i.test(msg)
+  );
 }
 
 // Detecta qué columnas opcionales están disponibles en la BD. Las migraciones
@@ -48,11 +77,23 @@ async function detectAvailableColumns(supabase: SupabaseClient): Promise<Set<Opt
     availableColumns = new Set(OPTIONAL_COLUMNS);
     return availableColumns;
   }
-  // Alguna falta → testear individualmente para identificar cuáles.
+  // El sondeo falló por algo que NO es una columna ausente (red, PGRST125,
+  // gateway). Asumir "no existe" haría que el upsert descartara los datos en
+  // silencio, que es exactamente lo que pasó en producción. Asumimos que están
+  // y NO cacheamos, para reintentar en la próxima llamada: si de verdad falta
+  // alguna, el upsert falla ruidosamente y nos enteramos.
+  if (!isMissingColumnError(error)) {
+    console.warn(
+      `⚠️  No pude sondear columnas opcionales (${formatError(error)}). ` +
+        'Asumo que existen y reintento en el próximo upsert.'
+    );
+    return new Set(OPTIONAL_COLUMNS);
+  }
+  // Alguna falta de verdad → testear individualmente para identificar cuáles.
   const found = new Set<OptionalCol>();
   for (const col of OPTIONAL_COLUMNS) {
     const { error: e } = await supabase.from('properties').select(col).limit(1);
-    if (!e) found.add(col);
+    if (!e || !isMissingColumnError(e)) found.add(col);
   }
   availableColumns = found;
 

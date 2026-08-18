@@ -12,6 +12,7 @@
 
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import { normalizeSupabaseUrl } from '../lib/supabase-url';
 config({ path: '.env.local' });
 
 const LOOKBACK_HOURS = 6;
@@ -32,7 +33,11 @@ async function main() {
     console.error('❌ Faltan NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
     process.exit(2);
   }
-  const sb = createClient(url, key, { auth: { persistSession: false } });
+  // Normalizado: el secret de GitHub traía sufijo '/rest/v1/' y todas las
+  // lecturas fallaban con PGRST125. Ver lib/supabase-url.ts.
+  const sb = createClient(normalizeSupabaseUrl(url), key, {
+    auth: { persistSession: false },
+  });
 
   const problems: string[] = [];
 
@@ -52,7 +57,10 @@ async function main() {
     .order('portal');
 
   if (portalErr) {
-    console.warn(`⚠️  No pude leer scraper_cursor (${portalErr.message}).`);
+    // NO es un warning: si no podemos leer, no sabemos nada de la salud de los
+    // scrapers. Reportarlo como "sin alertas" fue lo que ocultó durante
+    // semanas que el cron escribía 0 filas (incidente PGRST125, 2026-08-18).
+    problems.push(`no pude leer scraper_cursor: ${portalErr.message}`);
   } else {
     const portals = (portalRows ?? []).map((r) => (r as { portal: string }).portal);
     console.log(`\n━━ Tasa de bloqueo (últimas ${LOOKBACK_HOURS}h) ━━`);
@@ -66,7 +74,7 @@ async function main() {
         .eq('portal', portal)
         .gte('created_at', since);
       if (totalErr) {
-        console.warn(`⚠️  ${portal}: no pude contar attempts (${totalErr.message}). ¿Migración 016 aplicada?`);
+        problems.push(`${portal}: no pude contar attempts: ${totalErr.message}`);
         continue;
       }
       const { count: blocked } = await sb
@@ -98,7 +106,7 @@ async function main() {
     .order('portal');
 
   if (curErr) {
-    console.warn(`⚠️  No pude leer scraper_cursor (${curErr.message}).`);
+    problems.push(`no pude leer cursores: ${curErr.message}`);
   } else {
     console.log(`\n━━ Cursor staleness (umbral ${STALE_HOURS}h) ━━`);
     const now = Date.now();

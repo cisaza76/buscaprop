@@ -4,6 +4,7 @@
 // compararlo contra local. No imprime secretos: sólo forma derivada.
 import './_load-env';
 import { createClient } from '@supabase/supabase-js';
+import { normalizeSupabaseUrl } from '../lib/supabase-url';
 
 function shape(name: string, v: string | undefined) {
   if (!v) return console.log(`  ${name.padEnd(30)} UNSET`);
@@ -33,20 +34,25 @@ async function main() {
 
   if (!url || !key) { console.log('\nfaltan env vars — abortando'); return; }
 
-  console.log('\n━━ 3. fetch CRUDO a PostgREST (sin supabase-js) ━━');
-  const target = `${url.replace(/\/$/, '')}/rest/v1/properties?select=id&limit=1`;
-  try {
-    const res = await fetch(target, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
-    const body = await res.text();
-    console.log(`  HTTP ${res.status} ${res.statusText}`);
-    console.log(`  server=${res.headers.get('server')} cf-ray=${res.headers.get('cf-ray') ?? '—'}`);
-    console.log(`  body: ${body.slice(0, 300)}`);
-  } catch (e) {
-    console.log(`  fetch lanzó: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  const normalized = normalizeSupabaseUrl(url);
+  console.log(`\n  normalizeSupabaseUrl: len ${url.trim().length} → ${normalized.length} (${url.trim() === normalized ? 'sin cambio' : 'CORREGIDA'})`);
 
-  console.log('\n━━ 4. Las 4 llamadas que fallan en el cron ━━');
-  const sb = createClient(url, key, { auth: { persistSession: false } });
+  console.log('\n━━ 3. fetch CRUDO a PostgREST (sin supabase-js) ━━');
+  const probe = async (label: string, base: string) => {
+    const target = `${base.replace(/\/$/, '')}/rest/v1/properties?select=id&limit=1`;
+    try {
+      const res = await fetch(target, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      const body = await res.text();
+      console.log(`  ${label}: HTTP ${res.status} — ${body.slice(0, 140)}`);
+    } catch (e) {
+      console.log(`  ${label}: fetch lanzó ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  await probe('URL cruda del secret ', url);
+  await probe('URL normalizada     ', normalized);
+
+  console.log('\n━━ 4. Las 4 llamadas que fallaban en el cron (cliente normalizado) ━━');
+  const sb = createClient(normalized, key, { auth: { persistSession: false } });
   const show = (label: string, error: unknown, extra = '') => {
     if (!error) return console.log(`  ✅ ${label.padEnd(34)} OK ${extra}`);
     const e = error as Record<string, unknown>;
