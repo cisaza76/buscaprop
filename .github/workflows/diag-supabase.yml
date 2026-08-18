@@ -2,6 +2,8 @@ name: Diag Supabase env (manual)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/gh-actions-supabase-pgrst125]
 
 jobs:
   diag:
