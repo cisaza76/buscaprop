@@ -292,7 +292,14 @@ export async function markDelistedForPortal(
   portal: ScrapedProperty['source_portal'],
   options: { stalenessDays?: number } = {}
 ): Promise<{ markedDelisted: number; alreadyDelisted: number }> {
-  const stalenessDays = options.stalenessDays ?? 7;
+  // 90 días, no 7. El umbral de 7 nunca se ejerció (el sweep fallaba con
+  // PGRST125 desde siempre), y está calibrado contra una cadencia de revisita
+  // que no existe: medido el 2026-08-18, el 88% del inventario lleva más de 7
+  // días sin revisitarse, 61% más de 30 y 33% más de 60. Con 7 marcaríamos
+  // como delisted casi todo el catálogo. A 90 días queda el 8,8% — propiedades
+  // que no aparecieron en un ciclo completo de crawling, que es lo que
+  // 'delisted' debería significar.
+  const stalenessDays = options.stalenessDays ?? 90;
   const supabase = getServerClient();
   const cutoff = new Date(Date.now() - stalenessDays * 24 * 60 * 60 * 1000).toISOString();
 
