@@ -13,6 +13,7 @@
 // Uso: npm run check:scrapers   (o: tsx scripts/check-scraper-health.ts)
 // Lee de scrape_attempts (migración 016) y scraper_cursor (migración 013).
 
+import { writeFileSync } from 'node:fs';
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeSupabaseUrl } from '../lib/supabase-url';
@@ -155,6 +156,15 @@ async function main() {
   }
 
   // ── Veredicto ─────────────────────────────────────────────────────────────
+  // HEALTH_REPORT_PATH: el workflow lo setea para convertir estos problemas en
+  // un issue de GitHub. Se escribe SIEMPRE (vacío cuando todo está sano), para
+  // que el paso de alerta distinga "sano" de "el chequeo ni siquiera corrió" —
+  // ausencia de archivo significa que este script se cayó antes de concluir.
+  const reportPath = process.env.HEALTH_REPORT_PATH;
+  if (reportPath) {
+    writeFileSync(reportPath, problems.map((p) => `- ${p}`).join('\n'), 'utf8');
+  }
+
   console.log('\n' + '='.repeat(60));
   if (problems.length > 0) {
     console.error(`❌ ${problems.length} problema(s) de salud detectado(s):`);
