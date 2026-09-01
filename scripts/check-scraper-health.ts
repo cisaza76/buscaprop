@@ -2,8 +2,11 @@
 // Alerting de salud del scraping. Consulta dos señales y sale con código ≠0 si
 // alguna cruza umbral — corrible en CI/cron para detectar problemas temprano:
 //
-//   1. Tasa de bloqueo: % de intentos 403/429 por portal en las últimas N horas.
-//      Umbral por defecto: >20% → un portal probablemente nos está baneando.
+//   1. Tasa de bloqueo: % de intentos rechazados por portal en las últimas N
+//      horas. Umbral por defecto: >20% → el portal nos está cerrando la puerta.
+//      Cuenta 401/403/407/429: el 26-ago-2026 Properati pasó a responder 401 a
+//      todo y, como sólo mirábamos 403/429, el reporte decía "0/8093 bloqueados
+//      (0.0%)" mientras el portal llevaba 6 días sin entrar una sola fila.
 //   2. Cursor staleness: hace cuánto corrió el último tick de cada portal.
 //      Umbral por defecto: >3h sin correr → el orquestador puede estar caído.
 //
@@ -16,7 +19,10 @@ import { normalizeSupabaseUrl } from '../lib/supabase-url';
 config({ path: '.env.local' });
 
 const LOOKBACK_HOURS = 6;
-const BLOCK_RATE_THRESHOLD = 0.2; // 20% de 403/429
+const BLOCK_RATE_THRESHOLD = 0.2; // 20% de respuestas de bloqueo
+// Códigos que significan "el portal no nos deja entrar", no "esta URL no está".
+// 404 queda fuera a propósito: un listing borrado es ruido normal del sitemap.
+const BLOCK_STATUS_CODES = [401, 403, 407, 429];
 const MIN_ATTEMPTS_FOR_RATE = 20; // no alertar con muestra chica
 const STALE_HOURS = 3;
 
@@ -77,23 +83,44 @@ async function main() {
         problems.push(`${portal}: no pude contar attempts: ${totalErr.message}`);
         continue;
       }
-      const { count: blocked } = await sb
-        .from('scrape_attempts')
-        .select('*', { count: 'exact', head: true })
-        .eq('portal', portal)
-        .gte('created_at', since)
-        .in('status_code', [403, 429]);
+      // Desglose por código en vez de un solo count: 401 (auth nueva), 403
+      // (WAF), 429 (rate limit) piden respuestas distintas, y saberlo en la
+      // alerta ahorra ir a bucear los logs del runner.
+      const byCode: Array<[number, number]> = [];
+      let b = 0;
+      let countErr: string | null = null;
+      for (const code of BLOCK_STATUS_CODES) {
+        const { count, error } = await sb
+          .from('scrape_attempts')
+          .select('*', { count: 'exact', head: true })
+          .eq('portal', portal)
+          .gte('created_at', since)
+          .eq('status_code', code);
+        // Un count fallido NO puede leerse como cero: esa coerción silenciosa
+        // es exactamente la que pinta de verde un portal caído.
+        if (error || count == null) {
+          countErr = error?.message ?? 'count was null';
+          break;
+        }
+        if (count > 0) byCode.push([code, count]);
+        b += count;
+      }
+      if (countErr) {
+        problems.push(`${portal}: no pude contar bloqueos: ${countErr}`);
+        console.log(`  ⚠️  ${portal}: conteo de bloqueos falló (${countErr})`);
+        continue;
+      }
 
       const t = total ?? 0;
-      const b = blocked ?? 0;
       const rate = t > 0 ? b / t : 0;
       const pct = (rate * 100).toFixed(1);
       const flagged = t >= MIN_ATTEMPTS_FOR_RATE && rate > BLOCK_RATE_THRESHOLD;
       const flag = flagged ? '🔴' : '✅';
-      console.log(`  ${flag} ${portal}: ${b}/${t} bloqueados (${pct}%)`);
+      const detail = byCode.length ? ` [${byCode.map(([c, n]) => `${c}×${n}`).join(' ')}]` : '';
+      console.log(`  ${flag} ${portal}: ${b}/${t} bloqueados (${pct}%)${detail}`);
       if (flagged) {
         problems.push(
-          `${portal}: tasa de bloqueo ${pct}% (>${BLOCK_RATE_THRESHOLD * 100}%) en ${t} intentos`
+          `${portal}: tasa de bloqueo ${pct}% (>${BLOCK_RATE_THRESHOLD * 100}%) en ${t} intentos${detail}`
         );
       }
     }
