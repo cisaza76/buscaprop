@@ -8,7 +8,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321 NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-dummy npm run test:parsers",
-    "test:parsers": "tsx scripts/test-supabase-infra.ts && tsx scripts/test-ciencuadras-parser.ts && tsx scripts/test-m2-parser.ts && tsx scripts/test-fincaraiz-sitemap-order.ts && tsx scripts/test-fincaraiz-cursor-algorithm.ts",
+    "test:parsers": "tsx scripts/test-supabase-infra.ts && tsx scripts/test-ciencuadras-parser.ts && tsx scripts/test-m2-parser.ts && tsx scripts/test-fincaraiz-sitemap-order.ts && tsx scripts/test-fincaraiz-cursor-algorithm.ts && tsx scripts/test-run-outcome.ts",
     "check:scrapers": "tsx scripts/check-scraper-health.ts"
   },
   "dependencies": {
