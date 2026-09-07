@@ -106,6 +106,39 @@ export interface ProperatiOptions {
   enrichWithDetail?: boolean;
   /** Cursor incremental — combo_idx en el array de combos. */
   cursor?: { combo_idx?: number };
+  /**
+   * Pausa ante 403 (WAF block) pasada a fetchText. Default 600_000ms (10min),
+   * pensado para el full-run de GitHub Actions (budget 90min).
+   *
+   * Los callers con budget corto — el tick de Inngest, maxDuration=300s en
+   * Vercel — DEBEN bajar esto (ver lib/inngest/functions.ts): un solo 403 con
+   * el default de 10min ya excede el budget del serverless function, Vercel
+   * mata la invocación a mitad del sleep, y el cursor queda congelado para
+   * siempre porque el step 'save-cursor' nunca llega a correr.
+   */
+  httpBlockWaitMs?: number;
+  /**
+   * Reintentos ante 403/429/5xx/network pasados a fetchText. Default 3
+   * (fetchText). Bajar junto con httpBlockWaitMs en contextos de budget
+   * corto: cada reintento repite la pausa de blockWaitMs.
+   */
+  httpMaxRetries?: number;
+  /**
+   * Circuit breaker: abortar tras N fetches consecutivos fallidos (sin ningún
+   * éxito de por medio). Default 15.
+   *
+   * Motivación (incidente 2026-08-26, ver PR #12 y lib/inngest/functions.ts):
+   * cuando Properati empezó a devolver 401 en el 100% de los requests, el
+   * scraper igual recorrió los ~2080 requests de un full-run (fetch falla
+   * rápido con 401 — no dispara el sleep de blockWaitMs, así que esto es
+   * independiente de ese fix) a ~1.5s cada uno por el rate-limit por host:
+   * ~52min. GitHub Actions lo tolera (budget 90min) pero escribe 0 filas cada
+   * vez; el tick de Inngest (budget 300s) ni siquiera llega a la mitad antes
+   * de que Vercel lo mate por timeout — el cursor queda congelado para
+   * siempre porque 'save-cursor' nunca corre. Corta la sangría temprano en
+   * vez de solo acotar la espera de cada intento individual.
+   */
+  circuitBreakerThreshold?: number;
 }
 
 // ============================================================================
@@ -152,6 +185,10 @@ export async function scrapeProperati(
   const startComboIdx = opts.cursor?.combo_idx ?? 0;
   let nextComboIdx = startComboIdx;
 
+  const circuitBreakerThreshold = opts.circuitBreakerThreshold ?? 15;
+  let consecutiveFailures = 0;
+  let circuitTripped = false;
+
   outer: for (let cIdx = startComboIdx; cIdx < combos.length; cIdx++) {
     const combo = combos[cIdx];
     nextComboIdx = cIdx + 1;
@@ -167,14 +204,31 @@ export async function scrapeProperati(
 
       let html: string;
       try {
-        html = await fetchText(url, { userAgent: PROPERATI_UA, portal: 'properati' });
+        html = await fetchText(url, {
+          userAgent: PROPERATI_UA,
+          portal: 'properati',
+          blockWaitMs: opts.httpBlockWaitMs,
+          maxRetries: opts.httpMaxRetries,
+        });
         result.fetched++;
+        consecutiveFailures = 0;
       } catch (err) {
         result.errors.push({
           url,
           stage: 'fetch',
           message: err instanceof Error ? err.message : String(err),
         });
+        consecutiveFailures++;
+        if (consecutiveFailures >= circuitBreakerThreshold) {
+          circuitTripped = true;
+          result.errors.push({
+            url: '<circuit-breaker>',
+            stage: 'fetch',
+            message: `abortando: ${consecutiveFailures} fetches consecutivos fallidos sin ningún éxito — portal probablemente caído/bloqueado, no seguimos quemando budget`,
+          });
+          nextComboIdx = cIdx; // reintentar desde el mismo combo en el próximo tick
+          break outer;
+        }
         // 404 esperado al pasar el último page → break inner loop.
         if (err instanceof Error && err.message.includes('404')) break;
         continue;
@@ -208,11 +262,16 @@ export async function scrapeProperati(
 
   // Enriquecer con detail-fetch para extraer coords (no están en search).
   // Default true desde Phase 10 — sin coords no podemos enriquecer con IDECA.
-  const shouldEnrich = opts.enrichWithDetail !== false;
+  // Si el circuit breaker ya saltó, el portal parece caído — no gastamos más
+  // budget intentando el detail-fetch de lo poco que sí se haya parseado.
+  const shouldEnrich = opts.enrichWithDetail !== false && !circuitTripped;
   if (shouldEnrich) {
     for (const item of items) {
       try {
-        await enrichWithDetail(item);
+        await enrichWithDetail(item, {
+          blockWaitMs: opts.httpBlockWaitMs,
+          maxRetries: opts.httpMaxRetries,
+        });
       } catch (err) {
         result.errors.push({
           url: item.source_url,
@@ -416,11 +475,19 @@ export function parseCoordsFromHtml(
   return { latitude: lat, longitude: lng };
 }
 
-export async function enrichWithDetail(item: ScrapedProperty): Promise<void> {
+export async function enrichWithDetail(
+  item: ScrapedProperty,
+  opts: { blockWaitMs?: number; maxRetries?: number } = {}
+): Promise<void> {
   // Solo necesitamos el HTML para regex de coords. No parseamos cheerio
   // porque el script con coords NO es elemento DOM — es contenido de un
   // <script> inline.
-  const html = await fetchText(item.source_url, { userAgent: PROPERATI_UA, portal: 'properati' });
+  const html = await fetchText(item.source_url, {
+    userAgent: PROPERATI_UA,
+    portal: 'properati',
+    blockWaitMs: opts.blockWaitMs,
+    maxRetries: opts.maxRetries,
+  });
   const coords = parseCoordsFromHtml(html);
   if (coords) {
     item.latitude = coords.latitude;
