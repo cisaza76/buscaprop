@@ -3,7 +3,7 @@
 // Cada search page (32 cards) tiene los datos completos via data-test
 // selectors. Pagination via path: /s/{loc}/{type}/{op}/{N}.
 //
-// Recon Día 1+4:
+// Recon Día 1+4 (histórico, PRE incidente 2026-08-26 — ya no vigente, ver nota abajo):
 // - UA "BuscaProp Colombia (+...)" → 403. Browser UA → 200. Combinamos:
 //   "Mozilla/5.0 ... BuscaProp/1.0 (+contacto@...)" para identificarnos.
 // - Search URL: /s/{location-slug}/{type}/{op}[/{page}]
@@ -11,6 +11,19 @@
 // - Cards: <article class="snippet" data-idanuncio="UUID" data-url="...">
 //   con data-test selectors estables.
 // - 32 cards por página. ~268 páginas para Bogotá apto venta (~8.5K total).
+//
+// Bloqueo desde 2026-08-26 (ver PR #12) + diagnóstico confirmado 2026-09-07
+// (.github/workflows/diag-properati-headless.yml, run #2 commit 3ba9772):
+// el UA "browser-like" del fetch plano de arriba YA NO alcanza (401 en el
+// 100% de los requests — de ahí el circuit breaker de más abajo). Se probó
+// Playwright headless=true (Chromium headless real, no solo fetch): también
+// 401. Playwright headless=false vía xvfb, MISMA IP de GitHub Actions: 200 OK,
+// contenido real. O sea, el bloqueo es fingerprinting del modo headless de
+// Chromium, no de la IP/origen. Detalle y siguientes pasos en
+// docs/SCRAPING_ROADMAP.md § "Properati (CONFIRMADO 2026-09-07)". Migrar este
+// scraper a Playwright headed+xvfb es viable en teoría pero requiere
+// reutilizar un solo browser para todo el run (no un launch por request) —
+// no se ha implementado todavía.
 
 import * as cheerio from 'cheerio';
 import { fetchText } from './shared/http';

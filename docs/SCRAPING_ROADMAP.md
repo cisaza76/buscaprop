@@ -50,12 +50,24 @@ timeout limits.
 
 ### Investigación necesaria
 
-#### Properati (pendiente)
+#### Properati (CONFIRMADO 2026-09-07 — ver `.github/workflows/diag-properati-headless.yml`)
 - robots.txt → 403 forbidden
-- Probar User-Agent rotation
-- Probar headers de browser real (Accept-Language, Sec-Fetch-*)
-- Si bloquea consistentemente: usar **playwright headless** con browser real
-  (último recurso, costoso)
+- Cliente HTTP plano (fetch + UA browser-like): bloqueado con 401 desde el
+  incidente 2026-08-26 (ver PR #12, circuit breaker en `properati.ts`).
+- Playwright **headless=true** (Chromium headless real, no fetch plano):
+  también 401 "Access Denied" — el bloqueo NO es solo del cliente HTTP.
+- Playwright **headless=false vía xvfb**, misma IP de GitHub Actions: **200
+  OK**, página real (32 cards, título correcto). Confirmado en el run
+  `diag-properati-headless.yml` #2 (commit `3ba9772`).
+- Conclusión: el bloqueo es fingerprinting del modo headless de Chromium
+  (no de la IP/origen de GitHub Actions — la misma IP pasa en modo headed).
+  "Playwright headless" como se planteaba abajo NO es la salida; hace falta
+  **Playwright headed + xvfb**.
+- Pendiente antes de migrar el scraper de producción: no cabe lanzar un
+  browser por request (~4s/carga aquí vs. ~2080 requests/full-run). Hay que
+  diseñar un fetcher que reutilice un solo browser/context Playwright para
+  todo el run y medir throughput real contra el budget de GH Actions (90min)
+  y el tick de Inngest (300s) antes de comprometerse.
 
 #### MetroCuadrado API AWS
 - Endpoint identificado: `qbx5rofzo3.execute-api.us-east-2.amazonaws.com`
