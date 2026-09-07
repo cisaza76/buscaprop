@@ -65,6 +65,7 @@ export const scrapeFincaraizTick = inngest.createFunction(
     // limit:1 → un solo tick a la vez. Evita que un tick lento (ej pausa 403 de
     // 10min) deje correr el siguiente y produzca una race en updateCursor.
     concurrency: { limit: 1 },
+    timeouts: { finish: '4m' }, // Vercel maxDuration=300s: si el 403-handling duerme demasiado, el proceso muere a mitad de sleep y con concurrency:1 bloquea el cron (incidente 2026-09, properati 12+ dias sin correr).
     triggers: [{ cron: 'TZ=America/Bogota */30 * * * *' }],
   },
   async ({ step }) => {
@@ -114,6 +115,7 @@ export const scrapeCiencuadrasTick = inngest.createFunction(
     id: 'scrape-ciencuadras-tick',
     name: 'Scrape Ciencuadras (incremental)',
     concurrency: { limit: 1 },
+    timeouts: { finish: '4m' }, // Evita colgar el proceso si el sleep de reintentos excede el timeout del runtime.
     triggers: [{ cron: 'TZ=America/Bogota */30 * * * *' }],
   },
   async ({ step }) => {
@@ -161,6 +163,7 @@ export const scrapeMetroCuadradoTick = inngest.createFunction(
     id: 'scrape-metrocuadrado-tick',
     name: 'Scrape MetroCuadrado (incremental)',
     concurrency: { limit: 1 },
+    timeouts: { finish: '4m' }, // Evita colgar el proceso si el sleep de reintentos excede el timeout del runtime.
     triggers: [{ cron: 'TZ=America/Bogota 0 * * * *' }], // cada hora
   },
   async ({ step }) => {
@@ -204,6 +207,7 @@ export const scrapeProperatiTick = inngest.createFunction(
     id: 'scrape-properati-tick',
     name: 'Scrape Properati (incremental)',
     concurrency: { limit: 1 },
+    timeouts: { finish: '4m' }, // Evita colgar el proceso si el sleep de reintentos excede el timeout del runtime.
     triggers: [{ cron: 'TZ=America/Bogota 30 * * * *' }], // cada hora a la media
   },
   async ({ step }) => {
