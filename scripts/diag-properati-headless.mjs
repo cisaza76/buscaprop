@@ -12,16 +12,20 @@
 // headless carga OK -> Playwright/navegador real sí es una salida viable.
 //
 // Uso: node scripts/diag-properati-headless.mjs
+// HEADLESS=false -> lanza Chromium con ventana real (requiere xvfb-run en CI).
+// Sirve para aislar si el bloqueo es por IP/origen de red (afecta a ambos modos)
+// o por fingerprint de "headless" específicamente (solo afecta al modo headless).
 import { chromium } from 'playwright';
 
 const URL = 'https://www.properati.com.co/s/bogota-d-c-colombia/apartamento/venta';
+const HEADLESS = process.env.HEADLESS !== 'false';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 async function main() {
-  console.log(`[diag] Lanzando Chromium headless...`);
-  const browser = await chromium.launch({ headless: true });
+  console.log(`[diag] Lanzando Chromium (headless=${HEADLESS})...`);
+  const browser = await chromium.launch({ headless: HEADLESS });
   const context = await browser.newContext({
     userAgent: UA,
     viewport: { width: 1366, height: 900 },
@@ -50,12 +54,13 @@ async function main() {
   const cardCount = await page.locator('article.snippet, article[data-idanuncio]').count().catch(() => -1);
 
   console.log('----------------------------------------');
+  console.log(`[diag] headless: ${HEADLESS}`);
   console.log(`[diag] HTTP status: ${status}`);
   console.log(`[diag] navError: ${navError}`);
   console.log(`[diag] title: ${title}`);
   console.log(`[diag] cardCount (article.snippet): ${cardCount}`);
   console.log(`[diag] bodyText[0:500]:\n${bodyText}`);
-  console.log('-----------------------------------------');
+  console.log('----------------------------------------');
 
   const blocked =
     navError !== null ||
