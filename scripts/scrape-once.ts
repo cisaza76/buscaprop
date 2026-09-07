@@ -23,6 +23,7 @@ import path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 import { runAllScrapers, type RunnerOptions } from '../lib/scrapers/runner';
+import { dominantError, failedRuns } from '../lib/scrapers/shared/run-outcome';
 import type { SourcePortal } from '../lib/scrapers/shared/types';
 
 type Op = 'venta' | 'arriendo';
@@ -105,6 +106,19 @@ async function main() {
       totals.durationMs / 1000
     ).toFixed(1)}s`
   );
+
+  // Salir con ≠0 cuando un portal no escribió nada: sin esto el job de CI sale
+  // verde igual y el fallo pasa inadvertido. Ver lib/scrapers/shared/run-outcome.
+  const failed = failedRuns(results);
+  if (failed.length) {
+    console.error('\n❌ Portales sin escribir una sola fila:');
+    for (const r of failed) {
+      console.error(
+        `   ${r.portal}: 0 upserted, ${r.errors.length} errores — ${dominantError(r.errors)}`
+      );
+    }
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

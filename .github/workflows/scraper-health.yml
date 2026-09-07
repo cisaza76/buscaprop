@@ -3,9 +3,14 @@ name: Scraper health (cada 2h)
 # ─────────────────────────────────────────────────────────────────────────────
 # Alerting automático de salud del scraping. Corre check-scraper-health, que
 # sale con código ≠0 si:
-#   - tasa de bloqueo (403/429) > umbral en algún portal (posible ban), o
+#   - tasa de bloqueo (401/403/407/429) > umbral en algún portal, o
 #   - algún cursor lleva > umbral sin avanzar (orquestador caído / loop atascado).
-# Si el job FALLA, GitHub notifica por email a los watchers del repo.
+#
+# Cuando algo se rompe, el job abre (o actualiza) un ISSUE asignado, y lo cierra
+# solo al recuperarse — ver .github/scripts/scraper-health-alert.sh. Antes la
+# única señal era el email de "workflow failed" a los watchers: entre el 26-ago
+# y el 1-sep-2026 este workflow falló ~70 corridas seguidas por Properati caído
+# y nadie reaccionó. Un issue abierto es estado que no se archiva solo.
 #
 # Por qué existe: el incidente de ciencuadras (2026-06-02) — cursor congelado
 # 14h en un retry-storm — pasó desapercibido porque check-scraper-health solo
@@ -31,6 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # El GITHUB_TOKEN por defecto es read-only; abrir y cerrar el issue de
+    # alerta necesita escritura sobre issues.
+    permissions:
+      contents: read
+      issues: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,15 +55,41 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # continue-on-error: el fallo NO puede cortar el job acá, o el paso de
+      # alerta nunca corre y volvemos a quedarnos sin aviso. Se propaga al final.
       - name: Check scraper health
+        id: health
+        continue-on-error: true
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          HEALTH_REPORT_PATH: health-problems.txt
         run: npm run check:scrapers
+
+      - name: Abrir / actualizar / cerrar issue de alerta
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEALTH_REPORT_PATH: health-problems.txt
+          HEALTH_OUTCOME: ${{ steps.health.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ALERT_ASSIGNEE: ${{ github.repository_owner }}
+        run: bash .github/scripts/scraper-health-alert.sh
 
       - name: Summary
         if: always()
         run: |
           echo "### Scraper health · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Status: \`${{ job.status }}\` (failure ⇒ revisar bloqueo/staleness de algún portal)" >> $GITHUB_STEP_SUMMARY
+          echo "Status: \`${{ steps.health.outcome }}\` (failure ⇒ revisar el issue con label \`scraper-health\`)" >> $GITHUB_STEP_SUMMARY
+          if [ -s health-problems.txt ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            cat health-problems.txt >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # El job tiene que quedar en rojo igual: el issue es el canal principal,
+      # pero un workflow verde con scrapers caídos vuelve a mentirle al que mire
+      # la lista de corridas.
+      - name: Propagar el fallo del chequeo
+        if: steps.health.outcome == 'failure'
+        run: exit 1
