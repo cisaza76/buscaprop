@@ -22,5 +22,12 @@ jobs:
         run: |
           npm install playwright@1.48.0 --no-save
           npx playwright install --with-deps chromium
-      - name: Diagnóstico
+      - name: Diagnóstico (headless)
         run: node scripts/diag-properati-headless.mjs
+        continue-on-error: true
+      - name: Instalar xvfb (para modo headed)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Diagnóstico (headed, vía xvfb — misma IP de GH Actions, browser "real")
+        env:
+          HEADLESS: 'false'
+        run: xvfb-run -a node scripts/diag-properati-headless.mjs
