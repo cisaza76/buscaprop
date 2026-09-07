@@ -1,0 +1,26 @@
+name: Diag Properati headless (manual)
+
+# Diagnóstico puntual: confirma si Playwright/Chromium headless, corriendo
+# con el acceso a internet real de GitHub Actions (no un sandbox de agente),
+# logra cargar Properati o si recibe el mismo bloqueo 401/403 que el
+# scraper actual (cliente HTTP plano). No se ejecuta automáticamente
+# (workflow_dispatch) y no toca el scraper de producción.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Instalar Playwright + Chromium
+        run: |
+          npm install playwright@1.48.0 --no-save
+          npx playwright install --with-deps chromium
+      - name: Diagnóstico
+        run: node scripts/diag-properati-headless.mjs
