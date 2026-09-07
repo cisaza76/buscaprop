@@ -131,6 +131,20 @@ export interface HttpOptions {
   maxRetries?: number;
   /** Timeout por request en ms. Default 25_000. */
   timeoutMs?: number;
+  /**
+   * Pausa ante 403 (WAF block) antes de reintentar. Default 600_000 (10min) —
+   * pensado para el full-run de GitHub Actions (budget de 90min).
+   *
+   * CRÍTICO: los callers con budget corto (Inngest ticks, maxDuration=300s en
+   * Vercel) deben pasar un valor bajo acá. Un solo 403 con el default de 10min
+   * ya excede el budget completo del serverless function — Vercel mata la
+   * invocación a mitad del `sleep()`, sin excepción JS que capturar, así que
+   * el step 'save-cursor' nunca corre y el cursor queda congelado en
+   * `last_run_at` viejo para siempre (ver incidente properati 2026-09,
+   * cursor 251h stale con last_run_status='success' de la última corrida
+   * buena). Ver lib/inngest/functions.ts.
+   */
+  blockWaitMs?: number;
   /** Headers extra (merge sobre los de browser). */
   headers?: Record<string, string>;
   /**
@@ -144,6 +158,7 @@ const DEFAULTS: Required<Omit<HttpOptions, 'headers' | 'userAgent' | 'portal'>> 
   minDelayMs: 1500,
   maxRetries: 3,
   timeoutMs: 25_000,
+  blockWaitMs: 600_000,
 };
 
 export class HttpError extends Error {
@@ -153,7 +168,15 @@ export class HttpError extends Error {
 }
 
 export async function fetchText(url: string, opts: HttpOptions = {}): Promise<string> {
-  const cfg = { ...DEFAULTS, ...opts };
+  // Solo pisar defaults con claves EXPLÍCITAMENTE definidas. Un caller que
+  // pasa `{ blockWaitMs: maybeUndefinedVar }` no debe pisar el default con
+  // `undefined` (spread lo haría — la clave existe igual, así que
+  // `{...DEFAULTS, ...opts}` pondría cfg.blockWaitMs = undefined y rompería
+  // la aritmética de espera más abajo).
+  const definedOpts = Object.fromEntries(
+    Object.entries(opts).filter(([, v]) => v !== undefined)
+  ) as HttpOptions;
+  const cfg = { ...DEFAULTS, ...definedOpts };
   const host = hostOf(url);
   let attempt = 0;
   let lastErr: unknown;
@@ -226,11 +249,13 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
         // block lo da el intervalo entre corridas (30-90min), no un sleep
         // dentro de la misma ejecución.
       if (res.status === 403) {
-          record(403, null, 'http_403', null);
+        record(403, null, 'http_403', null);
+        const waitMs = cfg.blockWaitMs + Math.floor(Math.random() * 30_000);
+        console.warn(
+          `[http] 403 on ${host} — rotando UA y esperando ${Math.round(waitMs / 1000)}s`
+        );
         if (!opts.userAgent) rotateUA(host); // No rotar si el caller lo pidió explícito
-        const backoffMs = 2 ** attempt * 1500 + Math.floor(Math.random() * 500);
-        console.warn(`[http] 403 on ${host} — rotando UA y reintentando en ${backoffMs}ms`);
-        await sleep(backoffMs);
+        await sleep(waitMs);
         attempt++;
         continue;
       }
