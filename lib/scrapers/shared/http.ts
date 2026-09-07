@@ -216,16 +216,21 @@ export async function fetchText(url: string, opts: HttpOptions = {}): Promise<st
         continue;
       }
 
-      // 403: WAF block. Pause largo (~10 min) + rotar UA antes del próximo intento.
-      // Si el portal está banando este UA, el siguiente attempt usa otro.
+      // 403: WAF block. Registrar y reintentar con backoff CORTO (no 10min
+        // in-process) + rotar UA. Un sleep largo dentro de la misma ejecución
+        // puede exceder el timeout del runtime que la corre (ej. Vercel
+        // maxDuration=300s en los ticks de Inngest) y matar el proceso a
+        // mitad del sleep — el run queda "colgado" y, con concurrency:{limit:1},
+        // bloquea el cron indefinidamente (incidente 2026-09: scraper_cursor de
+        // properati sin actualizar por 12+ días). El cooldown real ante un WAF
+        // block lo da el intervalo entre corridas (30-90min), no un sleep
+        // dentro de la misma ejecución.
       if (res.status === 403) {
-        record(403, null, 'http_403', null);
-        const waitMs = 600_000 + Math.floor(Math.random() * 30_000);
-        console.warn(
-          `[http] 403 on ${host} — rotando UA y esperando ${Math.round(waitMs / 1000)}s`
-        );
+          record(403, null, 'http_403', null);
         if (!opts.userAgent) rotateUA(host); // No rotar si el caller lo pidió explícito
-        await sleep(waitMs);
+        const backoffMs = 2 ** attempt * 1500 + Math.floor(Math.random() * 500);
+        console.warn(`[http] 403 on ${host} — rotando UA y reintentando en ${backoffMs}ms`);
+        await sleep(backoffMs);
         attempt++;
         continue;
       }
