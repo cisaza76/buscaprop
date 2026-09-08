@@ -238,6 +238,9 @@ export async function findAlternativeZones(
     )
     .eq('city', input.city)
     .eq('is_duplicate', false)
+    // Sugerir una zona por inventario que ya no existe manda al cliente a una
+    // búsqueda vacía. Ver migración 021.
+    .eq('is_active', true)
     .or(ilikeFilters);
   if (input.property_type) q = q.eq('property_type', input.property_type);
   if (input.listing_type) q = q.eq('listing_type', input.listing_type);

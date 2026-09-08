@@ -72,7 +72,10 @@ export async function analyzeNeighborhood(
       'price_cop, area_m2, bedrooms, source_portal, neighborhood, city, property_type, listing_type, is_duplicate'
     )
     .eq('city', input.city)
-    .eq('is_duplicate', false);
+    .eq('is_duplicate', false)
+    // Inventario muerto sesga las estadísticas de mercado que le damos al
+    // cliente: precios de avisos que ya nadie puede comprar. Ver migración 021.
+    .eq('is_active', true);
 
   if (input.neighborhood) q = q.ilike('neighborhood', input.neighborhood);
   if (input.property_type) q = q.eq('property_type', input.property_type);
@@ -225,6 +228,8 @@ export async function findComparables(
     .eq('property_type', ref.property_type)
     .eq('listing_type', ref.listing_type)
     .eq('is_duplicate', false)
+    // Un comparable tiene que ser algo que el cliente pueda ir a ver hoy.
+    .eq('is_active', true)
     .gte('price_cop', minPrice)
     .lte('price_cop', maxPrice)
     .neq('id', ref.id);
