@@ -10,8 +10,12 @@
 //   2. Cursor staleness: hace cuánto corrió el último tick de cada portal.
 //      Umbral por defecto: >3h sin correr → el orquestador puede estar caído.
 //
+// Ambas señales miran SOLO los portales con scraper_cursor.active = true, para
+// que dar de baja un portal no exija excepciones por nombre acá dentro
+// (migración 020).
+//
 // Uso: npm run check:scrapers   (o: tsx scripts/check-scraper-health.ts)
-// Lee de scrape_attempts (migración 016) y scraper_cursor (migración 013).
+// Lee de scrape_attempts (migración 016) y scraper_cursor (migraciones 013/020).
 
 import { writeFileSync } from 'node:fs';
 import { config } from 'dotenv';
@@ -48,19 +52,22 @@ async function main() {
 
   const problems: string[] = [];
 
-  // ── 1. Tasa de bloqueo (403/429) por portal ──────────────────────────────
+  // ── 1. Tasa de bloqueo por portal ────────────────────────────────────────
   // Usamos count exacto por portal en vez de traer las filas: Supabase tiene
   // max-rows=1000 por defecto, así que un select de todas las filas se trunca
-  // silenciosamente y oculta los portales con menos volumen (ej. properati
-  // queda fuera del top-1000 que dominan fincaraiz/ciencuadras). Los counts
+  // silenciosamente y oculta los portales con menos volumen (los que quedan
+  // fuera del top-1000 que dominan fincaraiz/ciencuadras). Los counts
   // server-side no tienen ese límite.
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3_600_000).toISOString();
 
-  // Lista de portales a auditar: los configurados en scraper_cursor. Robusto
-  // ante portales nuevos sin tener que hardcodear.
+  // Lista de portales a auditar: los ACTIVOS en scraper_cursor. Robusto ante
+  // portales nuevos sin hardcodear, y ante portales dados de baja sin meter
+  // excepciones por nombre acá — una lista de ignorados dentro del checker es
+  // la semilla del próximo falso verde. Ver migración 020 (baja de Properati).
   const { data: portalRows, error: portalErr } = await sb
     .from('scraper_cursor')
     .select('portal')
+    .eq('active', true)
     .order('portal');
 
   if (portalErr) {
@@ -128,9 +135,14 @@ async function main() {
   }
 
   // ── 2. Cursor staleness ───────────────────────────────────────────────────
+  // También filtrado por active: el cursor de un portal dado de baja se queda
+  // congelado por definición, y sin este filtro alertaría "stale" para siempre
+  // — la alerta se volvería ruido y dejaríamos de mirarla, que es exactamente
+  // como Properati pasó 6 días caído sin que nadie reaccionara.
   const { data: cursors, error: curErr } = await sb
     .from('scraper_cursor')
     .select('portal, last_run_at, last_run_status')
+    .eq('active', true)
     .order('portal');
 
   if (curErr) {
