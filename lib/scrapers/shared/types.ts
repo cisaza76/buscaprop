@@ -31,6 +31,13 @@ export interface ScrapedProperty {
   contact_phone?: string;
   /** Nombre de la empresa/agencia (ej: "Profesionales Inmobiliarios"). */
   company_name?: string;
+  /**
+   * ¿El portal de origen sigue publicándolo? Solo lo setean los scrapers cuyo
+   * portal expone la señal (hoy Ciencuadras). Ausente = no sabemos, y el
+   * upsert lo trata como activo — falla hacia mostrar de más, nunca hacia
+   * esconder catálogo vivo.
+   */
+  is_active?: boolean;
   scraped_at?: string; // ISO timestamp; default = ahora.
   /**
    * Timestamp del <lastmod> declarado por el sitemap del portal para esta URL.

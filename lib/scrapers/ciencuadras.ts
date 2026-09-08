@@ -419,8 +419,11 @@ export function parseCiencuadrasListing(
     photos.push(heroImage);
   }
 
-  // Contacto: no está en el JSON-LD, sólo en el blob detail-state.
-  const contact = extractCiencuadrasContact(parseCiencuadrasDetailState(html));
+  // Contacto y estado de actividad: no están en el JSON-LD, sólo en el blob
+  // detail-state. Se parsea UNA vez y se derivan las dos cosas.
+  const detailState = parseCiencuadrasDetailState(html);
+  const contact = extractCiencuadrasContact(detailState);
+  const isActive = isCiencuadrasListingActive(detailState);
 
   return {
     source_portal: 'ciencuadras',
@@ -440,6 +443,7 @@ export function parseCiencuadrasListing(
     longitude: lng ?? undefined,
     contact_phone: contact.contact_phone,
     company_name: contact.company_name,
+    is_active: isActive,
     // contact_name se deja vacío a propósito: el portal sólo publica razón
     // social (realStateName / advisoryName), nunca nombre de persona.
   };
@@ -479,6 +483,37 @@ export function parseCiencuadrasDetailState(html: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * ¿El portal sigue publicando este inmueble?
+ *
+ * Ciencuadras responde 200 con la ficha completa —precio, teléfono, todo— y
+ * avisa que ya no está disponible SOLO en `message`. Por eso este caso es el
+ * pernicioso: parsea como item válido, se upsertea, refresca su scraped_at, y
+ * el barrido de staleness (que dispara por antigüedad) nunca lo alcanza. Sin
+ * esta señal el inmueble muerto se auto-refresca para siempre.
+ *
+ * TRAMPA MEDIDA: `error: true` aparece TAMBIÉN en fichas perfectamente vivas
+ * —viene de una sub-request lateral del portal—. Mirar `error` marcaría como
+ * muertos inmuebles buenos. La señal es `message`, nunca `error`.
+ *
+ * Los StatusCode 1 y 2 no se distinguen: ninguno de los dos está disponible.
+ *
+ * Falla hacia "activo": si no hay blob, no hay message, o el formato cambió,
+ * devuelve true. Esconder catálogo vivo es peor que mostrar uno muerto de más.
+ */
+export function isCiencuadrasListingActive(state: unknown): boolean {
+  if (!state || typeof state !== 'object') return true;
+  const key = Object.keys(state as Record<string, unknown>).find((k) =>
+    k.startsWith('detail-property-')
+  );
+  if (!key) return true;
+  const detail = (state as Record<string, any>)[key];
+  if (!detail || typeof detail !== 'object') return true;
+  const message = detail.message;
+  if (typeof message !== 'string') return true;
+  return !/no\s*activo/i.test(message);
 }
 
 // Normaliza a celular colombiano en E.164 sin '+': 57 + 3XXXXXXXXX.
