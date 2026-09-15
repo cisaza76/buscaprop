@@ -1,7 +1,7 @@
-name: Scrape portales (cada 6h, 4 jobs paralelos)
+name: Scrape portales (cada 6h, 3 jobs paralelos)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4 jobs paralelos, uno por portal. Mucho más rápido que serie:
+# Un job paralelo por portal activo. Mucho más rápido que serie:
 #   - Wall clock: ~40 min (vs ~150 min en serie con maxListings=1500)
 #   - Compute total: ~160 min (4 × 40 min) — cabe holgado en GH Actions free
 #     para repos públicos. Para repos privados free tier es 2000 min/mes
@@ -31,11 +31,13 @@ on:
         required: false
         type: choice
         default: ''
+        # Sin properati: no está en el matrix, así que elegirlo acá no correría
+        # ningún job — una opción muerta que parece funcionar. Para reintentarlo
+        # a mano: scripts/scrape-once.ts --portal properati.
         options:
           - ''
           - fincaraiz
           - metrocuadrado
-          - properati
           - ciencuadras
       op:
         description: 'Operación (vacío = venta+arriendo)'
@@ -69,10 +71,12 @@ jobs:
       matrix:
         # Si workflow_dispatch pasó portal específico, solo ese.
         # Sino los 4 en paralelo. La condicional se evalúa por step abajo.
+        # properati dado de baja el 2026-09-08 (bloqueo 401 por fingerprint
+        # headless; ver supabase/migrations/020_scraper_cursor_active.sql).
+        # Para correrlo a mano igual sirve: scripts/scrape-once.ts --portal properati.
         portal:
           - fincaraiz
           - metrocuadrado
-          - properati
           - ciencuadras
 
     steps:

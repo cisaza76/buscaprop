@@ -50,7 +50,7 @@ timeout limits.
 
 ### Investigación necesaria
 
-#### Properati (CONFIRMADO 2026-09-07 — ver `.github/workflows/diag-properati-headless.yml`)
+#### Properati — DADO DE BAJA 2026-09-08 (diagnóstico confirmado 2026-09-07)
 - robots.txt → 403 forbidden
 - Cliente HTTP plano (fetch + UA browser-like): bloqueado con 401 desde el
   incidente 2026-08-26 (ver PR #12, circuit breaker en `properati.ts`).
@@ -68,6 +68,39 @@ timeout limits.
   diseñar un fetcher que reutilice un solo browser/context Playwright para
   todo el run y medir throughput real contra el budget de GH Actions (90min)
   y el tick de Inngest (300s) antes de comprometerse.
+
+**Decisión (2026-09-08): se da de baja como fuente activa.**
+
+La única vía técnica que queda es Playwright headed vía xvfb. Se descartó, y no
+por inviabilidad: la cuenta da ~665 páginas por barrido completo (21.283
+propiedades ÷ 32 cards) a ~4s con un browser reutilizado ≈ 44 min, que cabe en
+el job de 90 min de GitHub Actions. Se descartó por costo/beneficio:
+
+- Properati es el portal más chico: 21.283 únicos, **8%** del inventario.
+- El portal señaló explícitamente que no quiere acceso automatizado
+  (`robots.txt` en 403 **y** fingerprinting de automatización). Sostener un
+  navegador contra su WAF es una carrera armamentista sin final.
+- Ese mismo esfuerzo rinde más en marcar inmuebles inactivos, que le sube la
+  calidad al 92% restante del inventario.
+
+Cómo quedó implementado (todo reversible):
+
+| Pieza | Cambio |
+|---|---|
+| `scraper_cursor.active` | Columna nueva (migración 020); properati en `false` |
+| `check-scraper-health.ts` | Audita solo portales con `active = true` |
+| `scrape-cron.yml` | Fuera del matrix y de las opciones de dispatch |
+| `lib/inngest/functions.ts` | `scrapeProperatiTick` definido pero SIN registrar |
+| `lib/scrapers/runner.ts` | Fuera de `ALL_PORTALS` (corridas por defecto) |
+
+Sigue invocable a mano para diagnósticos: `scripts/scrape-once.ts --portal properati`.
+
+**Para reactivarlo** (si se llega a un acuerdo de datos con el portal): `UPDATE
+scraper_cursor SET active = true WHERE portal = 'properati'`, devolver
+`scrapeProperatiTick` al array de `scrapeFunctions`, y properati a `ALL_PORTALS`
+y al matrix del cron. El cursor y las métricas acumuladas nunca se borraron.
+
+**Alternativa abierta:** acuerdo formal de data sharing con el portal.
 
 #### MetroCuadrado API AWS
 - Endpoint identificado: `qbx5rofzo3.execute-api.us-east-2.amazonaws.com`

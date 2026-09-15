@@ -12,6 +12,12 @@
 //   con data-test selectors estables.
 // - 32 cards por página. ~268 páginas para Bogotá apto venta (~8.5K total).
 //
+// DADO DE BAJA 2026-09-08 — este scraper YA NO CORRE automáticamente. Está
+// fuera de ALL_PORTALS (runner.ts), del matrix de scrape-cron.yml y del array
+// scrapeFunctions de Inngest; su fila de scraper_cursor tiene active=false
+// (migración 020). Sigue invocable a mano: scrape-once.ts --portal properati.
+// Motivo y cómo revertirlo: docs/SCRAPING_ROADMAP.md § "Properati — DADO DE BAJA".
+//
 // Bloqueo desde 2026-08-26 (ver PR #12) + diagnóstico confirmado 2026-09-07
 // (.github/workflows/diag-properati-headless.yml, run #2 commit 3ba9772):
 // el UA "browser-like" del fetch plano de arriba YA NO alcanza (401 en el

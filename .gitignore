@@ -42,3 +42,7 @@ next-env.d.ts
 
 # supabase cli
 supabase/.temp/
+
+# documentos generados en la raíz (resúmenes, reportes exportados)
+/*.docx
+/*.pdf

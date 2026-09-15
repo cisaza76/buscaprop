@@ -254,10 +254,17 @@ export const scrapeProperatiTick = inngest.createFunction(
   }
 );
 
-// Array para registrar en serve().
+// Array para registrar en serve(). Solo los portales ACTIVOS: una función que
+// no está acá no la conoce Inngest y su cron no dispara.
+//
+// scrapeProperatiTick queda definido arriba pero SIN registrar: Properati se
+// dio de baja el 2026-09-08 (bloqueo 401 al 100%, por fingerprint del modo
+// headless de Chromium — ver supabase/migrations/020_scraper_cursor_active.sql
+// y docs/SCRAPING_ROADMAP.md). Se conserva el código en vez de borrarlo porque
+// la baja es reversible: si se llega a un acuerdo de datos con el portal, esto
+// vuelve a ser una línea en este array más un UPDATE de scraper_cursor.active.
 export const scrapeFunctions = [
   scrapeFincaraizTick,
   scrapeCiencuadrasTick,
   scrapeMetroCuadradoTick,
-  scrapeProperatiTick,
 ];

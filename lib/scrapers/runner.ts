@@ -19,12 +19,15 @@ export interface RunnerOptions {
   ciencuadras?: CiencuadrasOptions;
 }
 
-const ALL_PORTALS: SourcePortal[] = [
-  'fincaraiz',
-  'ciencuadras',
-  'properati',
-  'metrocuadrado',
-]; // orden por dificultad ascendente — los fáciles primero para tener data temprano si rompe.
+// Portales que corren por DEFECTO (cuando no se pasa opts.portals).
+// Orden por dificultad ascendente — los fáciles primero, para tener data
+// temprano si algo revienta a mitad de corrida.
+//
+// 'properati' NO está acá: se dio de baja el 2026-09-08 por bloqueo 401 al
+// 100% (ver supabase/migrations/020_scraper_cursor_active.sql). Sigue siendo
+// invocable explícitamente —runOne lo soporta— para diagnósticos a mano:
+//   scripts/scrape-once.ts --portal properati
+const ALL_PORTALS: SourcePortal[] = ['fincaraiz', 'ciencuadras', 'metrocuadrado'];
 
 export async function runAllScrapers(opts: RunnerOptions = {}): Promise<{
   results: ScrapeResult[];
