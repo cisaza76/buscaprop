@@ -76,6 +76,14 @@ export interface Property {
   latitude?: number;
   longitude?: number;
   is_duplicate: boolean;
+  /**
+   * false = el portal de origen ya no lo publica. La búsqueda lo filtra; la
+   * ficha por link directo NO — sigue sirviendo, con aviso en la UI, para no
+   * romper links compartidos y conversaciones ya existentes.
+   */
+  is_active: boolean;
+  /** Última vez que un scraper vio esta propiedad en el portal de origen. */
+  scraped_at?: string | null;
   canonical_id?: string;
   /** Agente o empresa que publicó (poblado por scrapers post-migration 004). */
   contact_name?: string | null;
@@ -252,7 +260,10 @@ export async function searchProperties(filters: {
   let query = supabase
     .from('properties')
     .select('*', { count: 'exact' })
-    .eq('is_duplicate', false);
+    .eq('is_duplicate', false)
+    // Sin esto, un inmueble retirado del portal le sale al usuario igual que
+    // uno vivo. Ver migración 021.
+    .eq('is_active', true);
 
   // Texto libre: ILIKE 'word%word%' sobre title. Insensible a mayúsculas/tildes.
   // Nota: PostgREST escapa el valor automáticamente; no hay riesgo de SQL injection.
@@ -325,6 +336,8 @@ export async function fetchNeighborhoodsByCity(city: string): Promise<string[]> 
     .select('neighborhood')
     .eq('city', city)
     .eq('is_duplicate', false)
+    // Evita ofrecer barrios que solo existen en inventario muerto.
+    .eq('is_active', true)
     .not('neighborhood', 'is', null)
     .limit(5000);
   if (error) {

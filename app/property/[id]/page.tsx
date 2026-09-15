@@ -17,6 +17,7 @@ import { CertificateCard } from '@/components/dashboard/CertificateCard';
 import { fetchPropertyById, type Property } from '@/lib/supabase';
 import {
   formatCOP,
+  formatDateES,
   listingTypeLabel,
   portalLabel,
   propertyTypeLabel,
@@ -99,6 +100,30 @@ export default function PropertyDetailPage({ params }: PageProps) {
         >
           <span aria-hidden>←</span> Volver
         </button>
+
+        {/* Inmueble retirado del portal. La ficha sigue sirviendo por link
+            directo —no rompemos links compartidos ni conversaciones ya
+            existentes— pero servirla sin avisar sería engañoso. */}
+        {property.is_active === false && (
+          <div
+            role="status"
+            className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4"
+          >
+            <span aria-hidden className="text-lg leading-none">⚠️</span>
+            <div className="text-sm">
+              <p className="font-semibold text-amber-900">
+                Este inmueble ya no está publicado en {portalLabel(property.source_portal)}
+              </p>
+              <p className="mt-1 text-amber-800">
+                {property.scraped_at
+                  ? `La última vez que lo vimos fue el ${formatDateES(property.scraped_at)}. `
+                  : ''}
+                La información de abajo es la que teníamos en ese momento y puede estar
+                desactualizada.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8">
           {/* ── Columna principal ───────────────────────────────────── */}

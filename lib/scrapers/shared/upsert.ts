@@ -63,6 +63,7 @@ const OPTIONAL_COLUMNS = [
   'contact_phone',
   'company_name',
   'source_lastmod', // migration 016 — cache por lastmod del sitemap
+  'is_active', // migration 021 — inmueble retirado del portal de origen
 ] as const;
 type OptionalCol = (typeof OPTIONAL_COLUMNS)[number];
 
@@ -101,6 +102,7 @@ async function detectAvailableColumns(supabase: SupabaseClient): Promise<Set<Opt
   if (missing.length > 0) {
     const m = missing.join(', ');
     const migs = [];
+    if (missing.includes('is_active')) migs.push('021_properties_is_active.sql');
     if (missing.includes('dedup_hash')) migs.push('003_add_dedup_hash.sql');
     if (missing.some((c) => c === 'contact_name' || c === 'contact_phone' || c === 'company_name'))
       migs.push('004_add_contact_fields.sql');
@@ -183,6 +185,14 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
   if (available.has('company_name')) row.company_name = p.company_name ?? null;
   // source_lastmod: solo lo escribimos si el scraper lo provee. Si no viene,
   // dejamos lo que ya estaba (no sobrescribir con null en cada UPDATE).
+  // El `?? true` es lo que implementa la REACTIVACIÓN, y es seguro: que un
+  // inmueble llegue hasta acá significa que el portal lo sirvió en esta
+  // corrida. Los portales sin señal propia (Fincaraíz, M2) caen siempre en
+  // true, correcto por la misma razón — y no pisa el trabajo del barrido,
+  // porque el barrido solo marca lo que NO se está viendo. Sin el `?? true`
+  // un falso negativo sería permanente.
+  if (available.has('is_active')) row.is_active = p.is_active ?? true;
+
   if (available.has('source_lastmod') && p.source_lastmod !== undefined) {
     row.source_lastmod = p.source_lastmod;
   }
@@ -281,17 +291,21 @@ function formatError(e: unknown): string {
  * tiene `scraped_at` más viejo que el threshold (default 7 días), asumimos que
  * salió del portal (vendida/retirada/expirada).
  *
- * No mueve filas — solo agrega un snapshot 'delisted' a property_history.
- * La fila en `properties` se queda como estaba (para que sigamos pudiendo
- * mostrar el detalle si alguien tiene el link).
+ * Hace dos cosas: pone `is_active = false` (la propiedad deja de salir en
+ * búsqueda) y agrega un snapshot 'delisted' a property_history.
+ *
+ * La fila NO se borra ni se mueve: la ficha sigue sirviendo por link directo,
+ * porque un 404 rompería links compartidos y conversaciones ya existentes. El
+ * filtro va en la búsqueda, no en el detalle.
  *
  * Idempotente: si una propiedad ya tiene su último snapshot como 'delisted',
- * no agregamos otro.
+ * no agregamos otro. `is_active` sí se re-afirma siempre (es un UPDATE
+ * condicionado a is_active = true, así que no escribe de más).
  */
 export async function markDelistedForPortal(
   portal: ScrapedProperty['source_portal'],
   options: { stalenessDays?: number } = {}
-): Promise<{ markedDelisted: number; alreadyDelisted: number }> {
+): Promise<{ markedDelisted: number; alreadyDelisted: number; markedInactive: number }> {
   // 90 días, no 7. El umbral de 7 nunca se ejerció (el sweep fallaba con
   // PGRST125 desde siempre), y está calibrado contra una cadencia de revisita
   // que no existe: medido el 2026-08-18, el 88% del inventario lleva más de 7
@@ -304,18 +318,53 @@ export async function markDelistedForPortal(
   const cutoff = new Date(Date.now() - stalenessDays * 24 * 60 * 60 * 1000).toISOString();
 
   // 1. Encontrar propiedades del portal con scraped_at viejo.
-  const { data: stale, error: staleErr } = await supabase
-    .from('properties')
-    .select('id, price_cop')
-    .eq('source_portal', portal)
-    .lt('scraped_at', cutoff);
-  if (staleErr) {
-    console.warn(`[markDelisted] query stale failed: ${formatError(staleErr)}`);
-    return { markedDelisted: 0, alreadyDelisted: 0 };
+  //
+  // PAGINADO a propósito: PostgREST corta en 1000 filas SIN AVISAR. Este query
+  // traía ~23.000 filas elegibles y procesaba 1000 por corrida; el resto era
+  // invisible y el barrido parecía funcionar. Un select sin range sobre una
+  // tabla grande es siempre un resultado truncado en silencio.
+  const PAGE = 1000;
+  const stale: Array<{ id: string; price_cop: number | null }> = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const { data: page, error: staleErr } = await supabase
+      .from('properties')
+      .select('id, price_cop')
+      .eq('source_portal', portal)
+      .lt('scraped_at', cutoff)
+      .order('id')
+      .range(offset, offset + PAGE - 1);
+    if (staleErr) {
+      console.warn(`[markDelisted] query stale failed: ${formatError(staleErr)}`);
+      return { markedDelisted: 0, alreadyDelisted: 0, markedInactive: 0 };
+    }
+    if (!page || page.length === 0) break;
+    stale.push(...(page as Array<{ id: string; price_cop: number | null }>));
+    if (page.length < PAGE) break;
   }
-  if (!stale || stale.length === 0) return { markedDelisted: 0, alreadyDelisted: 0 };
+  if (stale.length === 0) return { markedDelisted: 0, alreadyDelisted: 0, markedInactive: 0 };
+  console.log(`[markDelisted] ${portal}: ${stale.length} propiedades stale (>${stalenessDays}d)`);
 
-  // 2. Para cada una, mirar el último snapshot. Si ya es 'delisted', skip.
+  // 2. Sacarlas de la búsqueda. Va en lote y condicionado a is_active = true,
+  //    así que el conteo refleja transiciones reales, no re-escrituras.
+  let markedInactive = 0;
+  for (let i = 0; i < stale.length; i += PAGE) {
+    const ids = stale.slice(i, i + PAGE).map((r) => r.id);
+    const { data: updated, error: updErr } = await supabase
+      .from('properties')
+      .update({ is_active: false })
+      .in('id', ids)
+      .eq('is_active', true)
+      .select('id');
+    if (updErr) {
+      // Sin la migración 021 la columna no existe: no es fatal, el snapshot
+      // de historia sigue teniendo valor. Se avisa y se continúa.
+      console.warn(`[markDelisted] update is_active failed: ${formatError(updErr)}`);
+      break;
+    }
+    markedInactive += updated?.length ?? 0;
+  }
+
+  // 3. Para cada una, mirar el último snapshot. Si ya es 'delisted', skip.
   let markedDelisted = 0;
   let alreadyDelisted = 0;
   const now = new Date().toISOString();
@@ -331,7 +380,7 @@ export async function markDelistedForPortal(
     if (snapErr) {
       const msg = snapErr.message ?? '';
       if (/does not exist/i.test(msg) || /could not find.*table/i.test(msg)) {
-        return { markedDelisted: 0, alreadyDelisted: 0 };
+        return { markedDelisted, alreadyDelisted, markedInactive };
       }
       continue;
     }
@@ -354,7 +403,7 @@ export async function markDelistedForPortal(
     }
     markedDelisted++;
   }
-  return { markedDelisted, alreadyDelisted };
+  return { markedDelisted, alreadyDelisted, markedInactive };
 }
 
 // Batch helper para procesar arrays de scraped properties.
