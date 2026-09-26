@@ -76,6 +76,9 @@ const SLUG_TYPES = [
 const SLUG_CITIES = [
   // ─── Multi-word: deben estar PRIMERO ──────────────────────────────
   'cartagena-de-indias',
+  // Antes que 'colombia': sin esto 'salgar-puerto-colombia' salía como
+  // city='colombia' + barrio 'salgar-puerto' (988 filas al 2026-09-26).
+  'puerto-colombia',
   'santa-fe-de-antioquia',
   'santafe-de-antioquia',
   'el-carmen-de-viboral',
