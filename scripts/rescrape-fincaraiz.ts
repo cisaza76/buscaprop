@@ -146,6 +146,9 @@ async function main() {
       if (done >= args.max) break outer;
       cursor = row.scraped_at;
       done++;
+      // Al inicio de la iteración: cada rama termina en `continue`, y un log al
+      // final solo salía cuando la fila 100, 200… caía en "actualizada".
+      if (done % 100 === 0) console.log(`  … ${done} — ${JSON.stringify(stats)}`);
 
       let html: string;
       try {
@@ -209,7 +212,6 @@ async function main() {
       }
       stats.updated++;
 
-      if (done % 100 === 0) console.log(`  … ${done} — ${JSON.stringify(stats)}`);
     }
   }
 
