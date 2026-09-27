@@ -8,7 +8,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { dedupeHash } from './dedupe';
 import { normalizeSupabaseUrl } from '../../supabase-url';
-import { canonicalCity, cleanLeftoverNeighborhood } from './normalize';
+import { canonicalCity, cleanLeftoverNeighborhood, sanitizeAttributes } from './normalize';
 import type { ScrapedProperty } from './types';
 
 let cachedClient: SupabaseClient | null = null;
@@ -143,6 +143,7 @@ export async function upsertProperty(
   // canonicalCity() lo devuelve igual.
   const normalizedCity = canonicalCity(p.city) ?? p.city;
   const normalizedNeighborhood = cleanLeftoverNeighborhood(p.neighborhood);
+  const attrs = sanitizeAttributes(p);
 
   let canonicalId: string | null = null;
   let hash: string | null = null;
@@ -179,9 +180,9 @@ export async function upsertProperty(
     price_cop: p.price_cop,
     city: normalizedCity,
     neighborhood: normalizedNeighborhood,
-    bedrooms: p.bedrooms ?? null,
-    bathrooms: p.bathrooms ?? null,
-    area_m2: p.area_m2 ?? null,
+    bedrooms: attrs.bedrooms,
+    bathrooms: attrs.bathrooms,
+    area_m2: attrs.area_m2,
     property_type: p.property_type,
     listing_type: p.listing_type,
     photos: p.photos ?? [],

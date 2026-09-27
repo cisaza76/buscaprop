@@ -280,6 +280,33 @@ export function cleanLeftoverNeighborhood(raw: string | null | undefined): strin
 }
 
 // ============================================================================
+// Atributos imposibles
+// ============================================================================
+//
+// Auditoría 2026-09-27: apartamentos de 0-5 m² vendidos en $990M, casas de 35
+// habitaciones arrendadas en $700.000. Son errores de digitación en el portal
+// de origen o del regex sobre la descripción ("a 5 metros del parque"). No se
+// puede saber el valor real, pero un null es honesto y un 1 m² contamina los
+// filtros de área y el precio/m² de analyzeNeighborhood. Umbrales holgados a
+// propósito: un local de 8 m² o una casa-hotel de 14 habitaciones son reales.
+const MIN_LIVING_AREA_M2 = 15; // apartamento/casa
+const MAX_ROOMS = 30;
+
+export function sanitizeAttributes(p: {
+  property_type: PropertyType;
+  area_m2?: number | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+}): { area_m2: number | null; bedrooms: number | null; bathrooms: number | null } {
+  const living = p.property_type === 'apartamento' || p.property_type === 'casa';
+  let area = p.area_m2 ?? null;
+  if (area != null && (area <= 0 || (living && area < MIN_LIVING_AREA_M2))) area = null;
+  const rooms = (n: number | null | undefined) =>
+    n != null && n >= 0 && n <= MAX_ROOMS ? n : null;
+  return { area_m2: area, bedrooms: rooms(p.bedrooms), bathrooms: rooms(p.bathrooms) };
+}
+
+// ============================================================================
 // Validación geográfica
 // ============================================================================
 //
