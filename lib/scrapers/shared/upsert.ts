@@ -121,7 +121,19 @@ export interface UpsertOutcome {
   id: string; // id final en la tabla properties
 }
 
-export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome> {
+export interface UpsertOptions {
+  /**
+   * No escribir snapshot en property_history. Para re-escrituras que corrigen
+   * datos mal parseados (scripts/rescrape-fincaraiz.ts): el salto de precio no
+   * es un cambio de mercado, y el caller arma el snapshot correcto él mismo.
+   */
+  skipHistory?: boolean;
+}
+
+export async function upsertProperty(
+  p: ScrapedProperty,
+  opts: UpsertOptions = {}
+): Promise<UpsertOutcome> {
   const supabase = getServerClient();
   const available = await detectAvailableColumns(supabase);
 
@@ -218,7 +230,12 @@ export async function upsertProperty(p: ScrapedProperty): Promise<UpsertOutcome>
   // El insert es best-effort: si la tabla no existe (migration 008 no
   // aplicada), logueamos warning y NO rompemos el upsert principal.
   const priceChanged = prevPriceCop !== null && prevPriceCop !== p.price_cop;
-  const shouldSnapshot = inserted || priceChanged;
+  // Un salto de más de 10× no es el mercado: es el parser corrigiendo un dato
+  // mal leído (Fincaraiz 24-ago→27-sep guardó $2.6M por $265M y viceversa).
+  // Registrarlo le mostraría al usuario una "rebaja del 99%" que nunca pasó.
+  const ratio = prevPriceCop ? p.price_cop / prevPriceCop : 1;
+  const isDataCorrection = ratio > 10 || ratio < 0.1;
+  const shouldSnapshot = !opts.skipHistory && (inserted || (priceChanged && !isDataCorrection));
 
   if (shouldSnapshot) {
     const deltaCop = prevPriceCop !== null ? p.price_cop - prevPriceCop : null;

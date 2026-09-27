@@ -611,8 +611,10 @@ export function parseFincaraizListing(
   const bathrooms =
     num(entity?.numberOfBathroomsTotal) ??
     parseInteger(matchOne(haystack, /(\d+)\s*ba(?:ñ|n)o/i));
+  // area_m2 es integer en BD y floorSize viene con decimales ("747.69").
+  const floor = num(entity?.floorSize?.value);
   const area_m2 =
-    num(entity?.floorSize?.value) ??
+    (floor != null ? Math.round(floor) : null) ??
     parseInteger(matchOne(haystack, /(\d+)\s*(?:m²|M2|m2|metros)/i));
 
   // City + neighborhood del slug.

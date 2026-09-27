@@ -2,12 +2,12 @@
 // Re-lee fichas de Fincaraiz que se parsearon con el parser roto y las
 // re-escribe con el arreglado.
 //
-// Contexto (2026-09-27): hacia el 20-ago Fincaraiz cambió su JSON-LD a
+// Contexto (2026-09-27): el 24-ago Fincaraiz cambió su JSON-LD a
 // RealEstateListing. El parser no lo reconocía, caía al regex "primer $ del
 // HTML" y guardaba cifras de la descripción. ~75.600 filas afectadas. Su
 // huella: latitude NULL (las coordenadas también dejaron de leerse), así que
 // el criterio de selección es `latitude is null` y `scraped_at` desde el
-// 15-ago y anterior al arranque de la corrida — lo que ya se re-leyó queda
+// 24-ago y anterior al arranque de la corrida — lo que ya se re-leyó queda
 // con scraped_at nuevo y no vuelve a salir. Idempotente y reanudable.
 //
 // Uso:
@@ -23,7 +23,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
 
-const SINCE = '2026-08-15T00:00:00Z';
+// Día del cambio de formato: medido por día, el 23-ago todo tenía geo y desde
+// el 25-ago nada (el 24 mitad y mitad).
+const SINCE = '2026-08-24T00:00:00Z';
 const PAGE = 500;
 const MAX_CONSECUTIVE_BLOCKS = 3;
 
@@ -86,6 +88,46 @@ async function main() {
       if (attempt >= 4) throw new Error(`leer candidatas: ${error.message}`);
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
+  }
+
+  // Historial: los snapshots 'active' desde SINCE los escribió el parser roto
+  // (precios de la descripción, deltas de "cambio" que nunca pasaron). Se
+  // borran y se escribe UNO correcto, con delta contra el último snapshot
+  // bueno — no contra el precio basura que tiene hoy la fila.
+  async function fixHistoryAndUpsert(propertyId: string, item: any) {
+    const del = await sb
+      .from('property_history')
+      .delete()
+      .eq('property_id', propertyId)
+      .eq('status', 'active')
+      .gte('scraped_at', SINCE);
+    if (del.error) throw new Error(`borrar historial: ${del.error.message}`);
+
+    await upsertProperty(item, { skipHistory: true });
+
+    const { data: last } = await sb
+      .from('property_history')
+      .select('price_cop')
+      .eq('property_id', propertyId)
+      .eq('status', 'active')
+      .order('scraped_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const prev = (last?.price_cop as number | undefined) ?? null;
+    if (prev === item.price_cop) return; // sin cambio real: nada que registrar
+    const ins = await sb.from('property_history').insert({
+      property_id: propertyId,
+      price_cop: item.price_cop,
+      scraped_at: new Date().toISOString(),
+      source_portal: 'fincaraiz',
+      status: 'active',
+      delta_cop: prev != null ? item.price_cop - prev : null,
+      delta_pct:
+        prev != null && prev > 0
+          ? Math.max(-999.99, Math.min(999.99, Math.round(((item.price_cop - prev) / prev) * 10000) / 100))
+          : null,
+    });
+    if (ins.error) throw new Error(`snapshot: ${ins.error.message}`);
   }
 
   const stats = { fetched: 0, updated: 0, delisted: 0, noPrice: 0, errors: 0 };
@@ -156,7 +198,15 @@ async function main() {
       }
       // Actualizar EN SU FILA: el upsert es por (portal, source_url).
       item.source_url = row.source_url;
-      if (!args.dryRun) await upsertProperty(item);
+      if (!args.dryRun) {
+        try {
+          await fixHistoryAndUpsert(row.id, item);
+        } catch (err) {
+          stats.errors++;
+          console.warn(`  ⚠️  ${row.source_url}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+          continue;
+        }
+      }
       stats.updated++;
 
       if (done % 100 === 0) console.log(`  … ${done} — ${JSON.stringify(stats)}`);
