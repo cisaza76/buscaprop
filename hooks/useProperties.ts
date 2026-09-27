@@ -1,7 +1,7 @@
 // hooks/useProperties.ts
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { searchProperties, type Property } from '@/lib/supabase';
 
 export type PropertyFilters = {
@@ -26,8 +26,15 @@ export function useProperties() {
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<PropertyFilters>({});
 
+  // Cada chip dispara una búsqueda; si una respuesta vieja llega después de la
+  // nueva, pisaba los resultados con los de filtros que ya no están puestos
+  // (reporte 2026-09-27: "Chico Alto + Apartamento + Arriendo" → 0 resultados
+  // habiendo 96). Solo aplica la respuesta de la última búsqueda lanzada.
+  const latestRequest = useRef(0);
+
   const runSearch = useCallback(
     async (nextFilters: PropertyFilters, nextPage = 1) => {
+      const requestId = ++latestRequest.current;
       setIsLoading(true);
       setError(null);
       try {
@@ -44,17 +51,24 @@ export function useProperties() {
           limit: PAGE_SIZE,
           offset,
         });
+        if (requestId !== latestRequest.current) return; // respuesta vieja
         setProperties(results as Property[]);
         setTotalCount(count ?? 0);
         setPage(nextPage);
         setFilters(nextFilters);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Error al buscar propiedades';
+        if (requestId !== latestRequest.current) return;
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof (err as { message?: unknown })?.message === 'string'
+              ? (err as { message: string }).message
+              : 'Error al buscar propiedades';
         setError(msg);
         setProperties([]);
         setTotalCount(0);
       } finally {
-        setIsLoading(false);
+        if (requestId === latestRequest.current) setIsLoading(false);
       }
     },
     []
