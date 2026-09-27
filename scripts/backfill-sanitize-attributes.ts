@@ -34,8 +34,14 @@ async function main() {
     );
     if (error || count == null) throw new Error(`contar "${r.label}": ${error?.message ?? 'null'}`);
     console.log(`  ${r.label}: ${count}`);
-    if (apply && count > 0) {
-      const { error: e } = await r.where(sb.from('properties').update(r.set));
+    // Por lotes de ids: un UPDATE con el filtro completo choca con el
+    // statement timeout mientras los scrapers escriben (2026-09-27). Cada
+    // lote saca sus filas del filtro, así que siempre se pide la "primera".
+    while (apply) {
+      const { data, error: se } = await r.where(sb.from('properties').select('id')).limit(200);
+      if (se) throw new Error(`leer "${r.label}": ${se.message}`);
+      if (!data?.length) break;
+      const { error: e } = await sb.from('properties').update(r.set).in('id', data.map((x: any) => x.id));
       if (e) throw new Error(`update "${r.label}": ${e.message}`);
     }
   }
