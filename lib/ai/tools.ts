@@ -28,6 +28,7 @@ import {
 } from '@/lib/ai/analytics';
 import { findAlternativeZones } from '@/lib/ai/zone-alternatives';
 import { resolveNeighborhood } from '@/lib/ai/neighborhood-normalization';
+import { filterLiveProperties } from '@/lib/ai/availability';
 import { analyzePropertyPhotos } from '@/lib/ai/photo-analysis';
 import { getCadastralForProperty } from '@/lib/cadastre/repository';
 import { soilClassificationLabel } from '@/lib/cadastre/ideca';
@@ -572,7 +573,7 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     }
   }
 
-  const { properties, count } = await searchProperties({
+  const { properties: rawProperties, count } = await searchProperties({
     city: cityRaw,
     neighborhood: resolvedNeighborhood,
     property_type: input.property_type as string | undefined,
@@ -584,8 +585,24 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     // Limit: 20 da contexto suficiente al modelo para representar bien el inventario
     // del barrio. Antes era 5 — perdía 75% del contexto cuando había 20 propiedades.
     // El modelo decide cuáles 2-3 mostrar al cliente, pero ve el panorama completo.
-    limit: 20,
+    // Pedimos el doble porque parte puede estar retirada del portal (abajo).
+    limit: 40,
   });
+
+  // Verificar en el portal antes de mostrar: el 2026-09-27 una búsqueda en
+  // Rosales devolvió 20 avisos y 15 ya estaban retirados. Las retiradas se
+  // marcan is_active=false para que no vuelvan a salir.
+  const live = await filterLiveProperties(rawProperties, 20);
+  const properties = live.properties;
+
+  if (properties.length === 0 && live.goneCount > 0) {
+    return JSON.stringify({
+      properties: [],
+      count: 0,
+      message: `Las ${live.goneCount} propiedades que había con esos filtros ya fueron retiradas de los portales (verificado ahora). Decile al user que lo que había se arrendó/vendió y ofrecé ampliar: findAlternativeZones, otro rango de precio o menos habitaciones.`,
+      resolved_neighborhood: resolvedNeighborhood ?? null,
+    });
+  }
 
   if (properties.length === 0) {
     // Si NO resolvió el barrio y hay candidates, exponerlos para que la AI
@@ -619,6 +636,8 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     portal: portalLabel(p.source_portal),
     has_phone: !!p.contact_phone,
     url: p.source_url,
+    // 'unknown' = el portal no respondió a tiempo; el aviso se muestra igual.
+    availability: live.status.get(p.id) === 'live' ? 'verificada' : 'sin verificar',
   }));
 
   // Si normalizamos el barrio, exponemoslo para que la AI le diga al user
@@ -635,6 +654,10 @@ async function runSearchProperties(input: Record<string, unknown>): Promise<stri
     {
       total_matches: count,
       returned: properties.length,
+      availability_note:
+        `Disponibilidad verificada en el portal hace segundos. ${live.goneCount} avisos de esta búsqueda ` +
+        'ya estaban retirados y se descartaron. total_matches es el conteo en nuestra BD e incluye ' +
+        'avisos no verificados: NO lo presentes como "hay N disponibles".',
       properties: summary,
       resolved_neighborhood: resolvedNeighborhood,
       ...(aliasNote ? { alias_note: aliasNote } : {}),
