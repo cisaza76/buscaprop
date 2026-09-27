@@ -43,10 +43,29 @@ async function main() {
   // el statement timeout los corta (probado 2026-09-26).
   const seen: string[] = [];
   for (;;) {
-    let q = sb.from('properties').select('city').like('city', '%-%').limit(PAGE);
-    if (seen.length) q = q.not('city', 'in', `(${seen.map((c) => `"${c}"`).join(',')})`);
-    const { data, error } = await q;
-    if (error) throw new Error(`leer ciudades con guion: ${error.message}`);
+    // Solo Fincaraiz produce slugs con guion (medido 2026-09-26: 6.499/6.499).
+    const build = () => {
+      let q = sb
+        .from('properties')
+        .select('city')
+        .eq('source_portal', 'fincaraiz')
+        .like('city', '%-%')
+        .limit(PAGE);
+      if (seen.length) q = q.not('city', 'in', `(${seen.map((c) => `"${c}"`).join(',')})`);
+      return q;
+    };
+    // Reintentos: con los scrapers escribiendo, el scan choca con el statement
+    // timeout de forma intermitente (2026-09-27).
+    let data: { city: string }[] | null = null;
+    for (let attempt = 1; ; attempt++) {
+      const r = await build();
+      if (!r.error) {
+        data = r.data;
+        break;
+      }
+      if (attempt >= 5) throw new Error(`leer ciudades con guion: ${r.error.message}`);
+      await new Promise((res) => setTimeout(res, 2000 * attempt));
+    }
     const fresh = [...new Set((data ?? []).map((r) => r.city as string))];
     if (!fresh.length) break;
     seen.push(...fresh);

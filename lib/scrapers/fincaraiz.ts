@@ -577,14 +577,18 @@ export function parseFincaraizListing(
   );
 
   // Price (estructurado o fallback a regex sobre HTML).
-  let price: number | null = null;
-  const priceSpec = action?.priceSpecification;
-  if (priceSpec?.price != null) price = parseCOP(priceSpec.price);
-  if (!price) {
-    const m = html.match(/\$\s*([\d.,]{6,})/);
-    if (m) price = parseCOP(m[1]);
-  }
-  if (!price) return null;
+  // Sin fallback a regex sobre el HTML: "el primer $ de la página" resultó ser
+  // cifras de la descripción (arriendo de Airbnb, cuota de administración) —
+  // ~3.200 ventas quedaron por debajo de $30M (2026-09-27). Sin precio
+  // estructurado, mejor no indexar que indexar un precio que no es el suyo.
+  // Umbral de $10.000: los $1/$2 son placeholders de "precio a convenir".
+  const rawPrice = action?.offers?.price ?? action?.priceSpecification?.price;
+  const price = rawPrice != null ? parseCOP(rawPrice) : null;
+  if (!price || price < 10_000) return null;
+
+  // RealEstateListing trae los atributos estructurados en mainEntity; las
+  // fichas viejas (Sale/RentAction) en `object`.
+  const entity = action?.mainEntity ?? action?.object;
 
   // Description (JSON-LD descripción más completa que og:description).
   const description = normalizeWhitespace(
@@ -597,11 +601,19 @@ export function parseFincaraizListing(
   // + descripción completa como fallback.
   const ogDesc = $('meta[property="og:description"]').attr('content') ?? '';
   const haystack = `${ogDesc} ${description}`;
-  const bedrooms = parseInteger(matchOne(haystack, /(\d+)\s*habitacion/i));
-  const bathrooms = parseInteger(
-    matchOne(haystack, /(\d+)\s*ba(?:ñ|n)o/i)
-  );
-  const area_m2 = parseInteger(matchOne(haystack, /(\d+)\s*(?:m²|M2|m2|metros)/i));
+  // Estructurado primero; el regex sobre la descripción queda de respaldo
+  // porque confunde "a 5 metros del parque" con el área.
+  // 0 cuenta como ausente: el JSON-LD pone 0 habitaciones en lotes y
+  // apartaestudios, y un 0 guardado saca al estudio del filtro "1 habitación".
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+  const bedrooms =
+    num(entity?.numberOfBedrooms) ?? parseInteger(matchOne(haystack, /(\d+)\s*habitacion/i));
+  const bathrooms =
+    num(entity?.numberOfBathroomsTotal) ??
+    parseInteger(matchOne(haystack, /(\d+)\s*ba(?:ñ|n)o/i));
+  const area_m2 =
+    num(entity?.floorSize?.value) ??
+    parseInteger(matchOne(haystack, /(\d+)\s*(?:m²|M2|m2|metros)/i));
 
   // City + neighborhood del slug.
   const city = canonicalCity(slug.city) ?? slug.city;
@@ -615,8 +627,8 @@ export function parseFincaraizListing(
   const photos = heroImage ? [heroImage] : [];
 
   // Geo.
-  const lat = action?.object?.geo?.latitude;
-  const lng = action?.object?.geo?.longitude;
+  const lat = entity?.geo?.latitude;
+  const lng = entity?.geo?.longitude;
 
   // Contacto: el JSON-LD tiene un nodo `landlord` con name e image. Suele
   // ser una empresa (SAS/S.A.S.) pero a veces es nombre de persona.
@@ -686,7 +698,10 @@ function findJsonLdAction($: cheerio.CheerioAPI): any | null {
       const items = Array.isArray(parsed) ? parsed : [parsed];
       for (const it of items) {
         const t = it?.['@type'];
-        if (t === 'RentAction' || t === 'SaleAction' || t === 'BuyAction') {
+        // Desde 2026 la ficha publica RealEstateListing (con @type en array:
+        // ["RealEstateListing","Product"]) en vez de Sale/RentAction.
+        const types = Array.isArray(t) ? t : [t];
+        if (types.some((x) => ['RentAction', 'SaleAction', 'BuyAction', 'RealEstateListing'].includes(x))) {
           result = it;
           return;
         }
