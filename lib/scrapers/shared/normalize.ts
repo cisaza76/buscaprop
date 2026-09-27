@@ -199,11 +199,35 @@ const CITY_CANONICAL: Record<string, string> = {
   versalles: 'Versalles',
   sitionuevo: 'Sitionuevo',
   buenavista: 'Buenavista',
+  // Slugs multi-palabra con tilde. Sin tilde en el slug, el fallback de
+  // abajo daría "El Penol" — y el chat filtra city con igualdad exacta.
+  'el retiro': 'El Retiro',
+  'la ceja': 'La Ceja',
+  'la estrella': 'La Estrella',
+  'el penol': 'El Peñol',
+  'la union': 'La Unión',
+  'santa barbara': 'Santa Bárbara',
+  'santa lucia': 'Santa Lucía',
+  'san andres': 'San Andrés',
+  'san jose': 'San José',
+  'san pedro de uraba': 'San Pedro de Urabá',
+  'puerto colombia': 'Puerto Colombia',
   // 'colombia' como city es realmente el municipio Colombia (Huila):
   colombia: 'Colombia',
   // 'aires' = "Buenos Aires" (Cauca, Antioquia o Valle):
   aires: 'Buenos Aires',
 };
+
+const CITY_CONNECTORS = new Set(['de', 'del', 'y']);
+
+function titleCaseCity(s: string): string {
+  return s
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w, i) => (i > 0 && CITY_CONNECTORS.has(w) ? w : w[0].toUpperCase() + w.slice(1)))
+    .join(' ');
+}
 
 export function canonicalCity(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -220,8 +244,11 @@ export function canonicalCity(raw: string | null | undefined): string | null {
   // 3+ chars, capitalizar primera letra (defensa contra futuros municipios
   // que el parser saque en lowercase pero no estén en el map).
   const trimmed = raw.trim();
-  if (trimmed.length >= 3 && trimmed === trimmed.toLowerCase()) {
-    return trimmed[0].toUpperCase() + trimmed.slice(1);
+  // Slug con guion ("El-retiro", "la-cumbre"): antes solo se capitalizaba la
+  // primera letra y quedaba "El-retiro" en BD — invisible para el chat, que
+  // busca "El Retiro". ~6.500 filas de Fincaraiz al 2026-09-26.
+  if (trimmed.includes('-') || (trimmed.length >= 3 && trimmed === trimmed.toLowerCase())) {
+    return titleCaseCity(trimmed.replace(/-+/g, ' '));
   }
   return trimmed;
 }

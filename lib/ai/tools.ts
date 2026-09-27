@@ -539,7 +539,15 @@ export async function executeTool(
         return { result: `Tool desconocido: ${name}`, isError: true };
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // searchProperties lanza el PostgrestError tal cual (objeto plano, no
+    // Error): con String(err) el log decía "[object Object]" y ocultaba que
+    // faltaba la columna is_active (conversación del 2026-09-22).
+    const msg =
+      err instanceof Error
+        ? err.message
+        : typeof (err as { message?: unknown })?.message === 'string'
+          ? (err as { message: string }).message
+          : String(err);
     return { result: `Error al ejecutar ${name}: ${msg}`, isError: true };
   }
 }
