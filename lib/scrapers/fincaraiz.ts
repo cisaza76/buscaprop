@@ -582,7 +582,8 @@ export function parseFincaraizListing(
   // ~3.200 ventas quedaron por debajo de $30M (2026-09-27). Sin precio
   // estructurado, mejor no indexar que indexar un precio que no es el suyo.
   // Umbral de $10.000: los $1/$2 son placeholders de "precio a convenir".
-  const rawPrice = action?.offers?.price ?? action?.priceSpecification?.price;
+  const rawPrice =
+    action?.offers?.price ?? action?.priceSpecification?.price ?? apolloListingPrice(html, url);
   const price = rawPrice != null ? parseCOP(rawPrice) : null;
   if (!price || price < 10_000) return null;
 
@@ -713,6 +714,36 @@ function findJsonLdAction($: cheerio.CheerioAPI): any | null {
     }
   });
   return result;
+}
+
+// Respaldo cuando la ficha no trae JSON-LD del aviso (solo BreadcrumbList —
+// ~1 de cada 4 en el re-scrape del 2026-09-28). El precio sigue en el estado
+// Apollo embebido, en el nodo cuyo "code" es el id del aviso:
+//   "code":"193349683",…,"price":{"amount":265000000,…,"hidePrice":false,…}
+// Anclado al id a propósito: la página trae nodos de otros avisos (similares,
+// destacados) y "el primer precio" es justo el bug que tuvimos.
+function apolloListingPrice(html: string, url: string): number | null {
+  const id = url.match(/\/(\d+)\/?$/)?.[1];
+  if (!id) return null;
+  const at = html.indexOf(`"code":"${id}"`);
+  if (at < 0) return null;
+  // El precio viene a pocos campos del code; ventana acotada para no caer en
+  // el nodo del aviso siguiente.
+  let win = html.slice(at, at + 1500);
+  const next = win.indexOf('"code":"', 8);
+  if (next > 0) win = win.slice(0, next); // no leer el precio del aviso vecino
+  // Dos formas vistas: {"amount":N,…,"hidePrice":b,"currency":{…}} y
+  // {"__typename":"Price","amount":N,"currency":{…},"hidePrice":b}. Se toma el
+  // objeto price hasta el campo hermano siguiente y se leen ambos adentro.
+  const p = win.indexOf('"price":{');
+  if (p < 0) return null;
+  let seg = win.slice(p, p + 400);
+  const end = seg.indexOf('"price_amount_usd"');
+  if (end > 0) seg = seg.slice(0, end);
+  const amount = seg.match(/"amount":(\d+)/)?.[1];
+  const hide = seg.match(/"hidePrice":(true|false)/)?.[1];
+  if (!amount || hide === 'true') return null;
+  return Number(amount);
 }
 
 function matchOne(s: string, re: RegExp): string | null {

@@ -41,12 +41,31 @@ eq('longitud de mainEntity.geo', p?.longitude, -76.531481002516);
 eq('operación', p?.listing_type, 'venta');
 eq('ciudad', p?.city, 'Cali');
 
-console.log('\n━━ Sin precio estructurado → no inventar uno ━━');
-// Misma ficha sin JSON-LD: los $ que quedan son cifras sueltas del HTML.
-// Mejor descartar la ficha que indexarla con un precio que no es el suyo.
+console.log('\n━━ Sin JSON-LD → precio del estado de la página, del aviso correcto ━━');
+// Hay fichas vivas que solo traen el BreadcrumbList (medido 2026-09-28: ~1 de
+// cada 4 en el re-scrape). El precio sigue en el estado Apollo, en el nodo
+// cuyo "code" es el id del aviso — NO "el primer $ de la página".
 const noLd = html.replace(/<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/g, '');
 const q = parseFincaraizListing(URL, noLd);
-eq('sin JSON-LD → descarta la ficha', q, null);
+eq('precio del nodo con code=id', q?.price_cop, 265_000_000);
+
+// Variante vista en fichas de Cartagena (2026-09-28): __typename primero y
+// hidePrice después de currency.
+const typed = noLd.replace(
+  /"price":\{"amount":265000000,"admin_included":265450000,"hidePrice":false,"currency":\{([^}]*)\}\}/,
+  '"price":{"__typename":"Price","amount":265000000,"currency":{$1},"hidePrice":false}'
+);
+eq('variante con __typename', typed !== noLd && parseFincaraizListing(URL, typed)?.price_cop, 265_000_000);
+
+// Si el nodo del aviso no está (o esconde el precio), descartar: los $ que
+// quedan son de otros avisos o de la descripción.
+const noNode = noLd.replace(/"code":"193349683"/g, '"code":"999"');
+eq('sin nodo del aviso → descarta', parseFincaraizListing(URL, noNode), null);
+// Nodo del aviso sin precio seguido de otro aviso con precio: no tomar el ajeno.
+const neighbor = noLd.replace('"price":{"amount":265000000', '"code":"555","price":{"amount":265000000');
+eq('no toma el precio del aviso vecino', parseFincaraizListing(URL, neighbor), null);
+const hidden = noLd.replace('"hidePrice":false', '"hidePrice":true');
+eq('hidePrice:true → descarta', parseFincaraizListing(URL, hidden), null);
 
 if (failures > 0) {
   console.log(`\n❌ ${failures} fallo(s)`);
