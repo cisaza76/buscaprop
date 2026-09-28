@@ -42,12 +42,13 @@ export default function RegisterPage() {
     try {
       const result = await signUp(email, password, fullName);
       if (!result.success) {
-        setError(result.error || 'Error en el registro');
+        setError(result.error);
         return;
       }
-      setSuccess(
-        result.message ?? 'Cuenta creada. Revisa tu correo para verificar tu cuenta.'
-      );
+      // La confirmación por correo está desactivada (mailer_autoconfirm): el
+      // registro deja la sesión abierta y el useEffect de arriba redirige al
+      // dashboard. Antes decía "revisa tu correo" y no se mandaba ninguno.
+      setSuccess('Cuenta creada. Entrando a tu panel…');
     } catch (err) {
       setError('Ocurrió un error inesperado');
       console.error(err);
