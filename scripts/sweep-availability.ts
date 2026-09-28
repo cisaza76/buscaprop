@@ -127,7 +127,12 @@ async function main() {
           ua: null,
           attempt: 1,
           error_kind: classifyStatus(status),
-          error_message: null,
+          // Veredicto etiquetado: check-scraper-health cuenta sweep:gone /
+          // sweep:* por portal en 24h para detectar un clasificador ciego o un
+          // barrido parado. Va acá y no en properties porque scrape_attempts
+          // tiene índice (portal, created_at); contar en properties por
+          // availability_checked_at es un seq scan que da timeout.
+          error_message: `sweep:${verdict}`,
         });
         st.checked++;
         if (verdict === 'live') {

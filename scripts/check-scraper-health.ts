@@ -21,6 +21,7 @@ import { writeFileSync } from 'node:fs';
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeSupabaseUrl } from '../lib/supabase-url';
+import { evaluateSweepHealth } from '../lib/scrapers/shared/sweep-health';
 config({ path: '.env.local' });
 
 const LOOKBACK_HOURS = 6;
@@ -164,6 +165,38 @@ async function main() {
       if (ageH > STALE_HOURS) {
         problems.push(`${c.portal}: último tick hace ${ageH.toFixed(1)}h (>${STALE_HOURS}h)`);
       }
+    }
+  }
+
+  // ── 3. Barrido de disponibilidad ──────────────────────────────────────────
+  // ¿Está corriendo y reconoce retiros? Ver lib/scrapers/shared/sweep-health.ts.
+  // Cuenta los intentos del barrido en scrape_attempts (error_message =
+  // 'sweep:<veredicto>', índice portal+created_at). Un count fallido es un
+  // problema, no un cero: coercerlo dispararía "barrido parado" falso.
+  if (!curErr) {
+    console.log('\n━━ Barrido de disponibilidad (últimas 24h) ━━');
+    const since24 = new Date(Date.now() - 24 * 3_600_000).toISOString();
+    for (const c of (cursors ?? []) as CursorRow[]) {
+      const base = () =>
+        sb
+          .from('scrape_attempts')
+          .select('*', { count: 'exact', head: true })
+          .eq('portal', c.portal)
+          .gte('created_at', since24);
+      const chk = await base().like('error_message', 'sweep:%');
+      const gone = await base().eq('error_message', 'sweep:gone');
+      if (chk.error || gone.error || chk.count == null || gone.count == null) {
+        const msg = chk.error?.message || gone.error?.message || `count null (HTTP ${chk.status}/${gone.status})`;
+        problems.push(`${c.portal}: no pude contar el barrido de disponibilidad: ${msg}`);
+        console.log(`  ⚠️  ${c.portal}: conteo falló (${msg})`);
+        continue;
+      }
+      const verdict = evaluateSweepHealth({ portal: c.portal, checked: chk.count, gone: gone.count });
+      const pct = chk.count ? ((gone.count / chk.count) * 100).toFixed(1) : '0.0';
+      console.log(
+        `  ${verdict ? '🔴' : '✅'} ${c.portal}: ${chk.count} verificados, ${gone.count} retirados (${pct}%)`
+      );
+      if (verdict) problems.push(verdict.message);
     }
   }
 
