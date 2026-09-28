@@ -325,12 +325,31 @@ export async function fetchPropertyById(id: string): Promise<Property | null> {
   return (data as Property | null) ?? null;
 }
 
-// Devuelve los barrios distintos que existen en una ciudad. PostgREST no
-// soporta SELECT DISTINCT, así que dedupeamos client-side. Limitamos a
-// 5000 filas — suficiente para extraer los ~50-200 barrios únicos por
-// ciudad colombiana sin traer todo el dataset.
+// Barrios de una ciudad para el desplegable del dashboard. La función SQL
+// neighborhoods_by_city (migración 023) hace el DISTINCT sobre todo el
+// inventario vivo; antes se deduplicaban en el browser las primeras 5.000
+// filas y Bogotá mostraba 257 de ~2.400 barrios (2026-09-28).
+// Solo barrios con al menos MIN_LISTINGS avisos: los de 1-2 suelen ser
+// variantes ruidosas ("Chico Norte Edif Pino Alto") que alargan la lista.
+const MIN_LISTINGS_PER_NEIGHBORHOOD = 3;
+
 export async function fetchNeighborhoodsByCity(city: string): Promise<string[]> {
   if (!city) return [];
+  const { data, error } = await supabase.rpc('neighborhoods_by_city', { p_city: city });
+  if (!error && data) {
+    return (data as Array<{ neighborhood: string; listings: number }>)
+      .filter((r) => r.listings >= MIN_LISTINGS_PER_NEIGHBORHOOD)
+      .map((r) => r.neighborhood)
+      .sort((a, b) => a.localeCompare(b, 'es-CO'));
+  }
+  console.error('neighborhoods_by_city falló, uso muestra de filas:', error);
+  return fetchNeighborhoodsSample(city);
+}
+
+// Respaldo si la RPC no está (migración 023 sin aplicar) o da timeout: muestra
+// de 5.000 filas deduplicada acá. Incompleta a propósito — mejor lista parcial
+// que desplegable vacío.
+async function fetchNeighborhoodsSample(city: string): Promise<string[]> {
   const { data, error } = await supabase
     .from('properties')
     .select('neighborhood')
