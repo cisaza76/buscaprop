@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
 import { getStoredUtm } from '@/lib/utm';
+import { trackChatMessage } from '@/lib/analytics/client';
 
 interface ChatWidgetProps {
   /** Si la conversación arranca desde una propiedad específica (opcional). */
@@ -84,6 +85,8 @@ export function ChatWidget({
   const sendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
+    // Sin contenido: solo que hubo un mensaje y si venía de una ficha.
+    trackChatMessage(session?.user?.id, !!propertyId);
 
     // Optimistic: agregar mensaje del usuario inmediatamente.
     const userMsg: UIMessage = {
@@ -211,7 +214,9 @@ export function ChatWidget({
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[400px] max-h-[600px] bg-gray-50">
+      {/* ph-no-capture: el hilo no se graba en session replay — acá el
+          usuario escribe su teléfono y el asesor lo repite. */}
+      <div className="ph-no-capture flex-1 overflow-y-auto p-4 space-y-3 min-h-[400px] max-h-[600px] bg-gray-50">
         {messages.length === 0 && (
           <div className="text-center text-sm text-gray-500 py-8">
             <p className="text-2xl mb-2" aria-hidden>👋</p>

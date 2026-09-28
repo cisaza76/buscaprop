@@ -1,6 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Proxy de PostHog: el browser le habla a /ingest (mismo dominio) y Next
+  // reenvía a PostHog US. Sin esto los adblockers cortan los eventos.
+  async rewrites() {
+    return [
+      { source: '/ingest/static/:path*', destination: 'https://us-assets.i.posthog.com/static/:path*' },
+      { source: '/ingest/:path*', destination: 'https://us.i.posthog.com/:path*' },
+    ];
+  },
+  // Los endpoints de PostHog llevan barra final; sin esto Next redirige y el
+  // SDK pierde el POST.
+  skipTrailingSlashRedirect: true,
   images: {
     // Hosts de los 4 portales scrapeados. Sin esto, <Image> rechaza
     // las URLs externas con error "Invalid src prop".

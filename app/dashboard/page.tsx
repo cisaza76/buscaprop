@@ -8,6 +8,7 @@ import { SearchHeader } from '@/components/dashboard/SearchHeader';
 import { ResultsGrid } from '@/components/dashboard/ResultsGrid';
 import { SavedSearchesSidebar } from '@/components/dashboard/SavedSearchesSidebar';
 import { useProperties, type PropertyFilters } from '@/hooks/useProperties';
+import { track } from '@/lib/analytics/client';
 import { useSavedSearches, type SavedSearch } from '@/hooks/useSavedSearches';
 import { describeFilters } from '@/lib/utils';
 
@@ -28,16 +29,25 @@ export default function DashboardPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // search_performed: solo búsquedas del usuario (no la carga inicial ni
+  // "limpiar"). Nunca el texto libre: solo si hubo filtros, el total y la ciudad.
+  const searchAndTrack = async (f: PropertyFilters) => {
+    const r = await runSearch(f, 1);
+    if (!r) return;
+    const hasFilters = Object.entries(f).some(([, v]) => v !== undefined && v !== '');
+    track('search_performed', { has_filters: hasFilters, results_count: r.count, city: f.city ?? null });
+  };
+
   // Texto libre → ILIKE sobre title. Compone con filtros estructurados (AND).
   const handleSearch = (query: string) => {
     const trimmed = query.trim();
     setSearchQuery(trimmed);
-    runSearch({ ...filters, query: trimmed || undefined }, 1);
+    void searchAndTrack({ ...filters, query: trimmed || undefined });
   };
 
   // Cualquier cambio de chip/dropdown dispara búsqueda inmediata (Zillow UX).
   const handleFiltersChange = (next: PropertyFilters) => {
-    runSearch({ ...next, query: searchQuery || undefined }, 1);
+    void searchAndTrack({ ...next, query: searchQuery || undefined });
   };
 
   const handleClearFilters = () => {
@@ -65,7 +75,7 @@ export default function DashboardPage() {
   const handleSelectSavedSearch = (s: SavedSearch) => {
     const f = (s.filters ?? {}) as PropertyFilters;
     setSearchQuery(f.query ?? s.search_query ?? '');
-    runSearch(f, 1);
+    void searchAndTrack(f);
   };
 
   return (

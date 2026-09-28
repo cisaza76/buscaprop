@@ -18,8 +18,11 @@ import { formatCOP, portalLabel } from '@/lib/utils';
 import {
   updatePreferences,
   setUserPhone,
+  getConversation,
   type ConversationPreferences,
 } from '@/lib/ai/conversation';
+import { captureServerEvent } from '@/lib/analytics/server';
+import { isInternalUser } from '@/lib/analytics/internal';
 import {
   analyzeNeighborhood,
   findComparables,
@@ -766,7 +769,18 @@ async function runRequestContact(
     };
   }
 
+  const before = await getConversation(ctx.conversationId).catch(() => null);
   const phone = await setUserPhone(ctx.conversationId, normalized);
+  // lead_created: solo la primera vez que esta conversación deja teléfono, y
+  // sin el teléfono. distinct_id = id de auth del usuario (web exige login).
+  if (before && !before.user_phone) {
+    console.info(`[analytics] lead_created conv=${before.id.slice(0, 8)} channel=${before.channel}`);
+    await captureServerEvent(before.user_id ?? `conversation:${before.id}`, 'lead_created', {
+      channel: before.channel,
+      ...(before.property_id ? { property_id: before.property_id } : {}),
+      is_internal: before.user_id ? isInternalUser({ id: before.user_id }) : false,
+    });
+  }
   const preferredTime = (input.preferred_time as string) ?? 'lo antes posible';
   const preferredMethod = (input.preferred_method as string) ?? 'whatsapp';
 
