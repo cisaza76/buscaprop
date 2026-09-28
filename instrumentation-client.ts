@@ -40,7 +40,12 @@ if (token) {
       // QA: con localStorage.ph_debug = 'true' (se activa a mano) la instancia
       // queda en window.posthog para inspeccionar eventos con
       // posthog.on('eventCaptured', …). Sin el flag no se expone nada.
+      //
+      // vercel_env como super property: va en todos los eventos del browser
+      // (el pageview inicial incluido — loaded corre antes) para filtrar
+      // development/preview. Acceso literal: Next lo reemplaza en el build.
       loaded: (ph) => {
+        ph.register({ vercel_env: process.env.NEXT_PUBLIC_VERCEL_ENV ?? 'development' });
         try {
           if (window.localStorage.getItem('ph_debug') === 'true') {
             (window as unknown as { posthog: typeof ph }).posthog = ph;
