@@ -21,6 +21,13 @@ function getClient(): PostHog | null {
   return client;
 }
 
+// Estos eventos no traen $host (eso lo pone el SDK del browser), así que el
+// filtro de test accounts por $host no los separa: vercel_env dice de qué
+// entorno salieron. Sin VERCEL_ENV no estamos en Vercel → 'development'.
+export function serverEventProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  return { ...properties, vercel_env: process.env.VERCEL_ENV || 'development' };
+}
+
 export async function captureServerEvent(
   distinctId: string,
   event: 'signup_completed' | 'lead_created',
@@ -29,7 +36,7 @@ export async function captureServerEvent(
   try {
     const c = getClient();
     if (!c) return;
-    await c.captureImmediate({ distinctId, event, properties });
+    await c.captureImmediate({ distinctId, event, properties: serverEventProperties(properties) });
   } catch (err) {
     console.warn(`[analytics] ${event} no se pudo enviar: ${err instanceof Error ? err.message : String(err)}`);
   }
