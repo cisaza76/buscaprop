@@ -1,0 +1,59 @@
+name: Barrido de disponibilidad (cada 6h)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verifica en el portal de origen que los avisos activos sigan publicados y
+# marca is_active=false los retirados. Ver scripts/sweep-availability.ts.
+#
+# Horario desfasado 1h30 del scrape-cron ('0 */6') para no pegarle a los
+# portales con los dos jobs a la vez. Presupuesto 40 min: ~1.500 avisos por
+# portal por corrida a ~1,6 s c/u → ~18.000 verificaciones/día.
+#
+# Requiere la migración 022 (availability_checked_at). Sin ella el script
+# falla ruidoso y el job queda en rojo — no en silencio.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '30 1,7,13,19 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Presupuesto en minutos'
+        required: false
+        type: string
+        default: '40'
+
+concurrency:
+  group: availability-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Sweep
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          npx tsx scripts/sweep-availability.ts --minutes "${{ inputs.minutes || '40' }}" | tee sweep.log
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Barrido de disponibilidad · $(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          sed -n '/━━ Resultado/,$p' sweep.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(sin resultado)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

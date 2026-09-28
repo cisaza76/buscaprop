@@ -62,6 +62,14 @@ const UA =
  * redirect:'manual' para ver el 301 de Fincaraiz en vez de seguirlo.
  */
 export async function checkListingLive(url: string, timeoutMs = 6000): Promise<Liveness> {
+  return (await checkListingLiveDetailed(url, timeoutMs)).verdict;
+}
+
+/** Igual que checkListingLive, más el status HTTP (el barrido lo usa para detectar bloqueos). */
+export async function checkListingLiveDetailed(
+  url: string,
+  timeoutMs = 6000
+): Promise<{ verdict: Liveness; status: number | null }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -76,9 +84,12 @@ export async function checkListingLive(url: string, timeoutMs = 6000): Promise<L
     });
     const location = res.headers.get('location');
     const html = res.status === 200 ? await res.text() : undefined;
-    return classifyListingPage({ url, status: res.status, location, html });
+    return {
+      verdict: classifyListingPage({ url, status: res.status, location, html }),
+      status: res.status,
+    };
   } catch {
-    return 'unknown';
+    return { verdict: 'unknown', status: null };
   } finally {
     clearTimeout(timer);
   }

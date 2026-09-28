@@ -35,6 +35,18 @@ export async function filterLiveProperties<T extends { id: string; source_url: s
     if (error) console.warn(`[availability] no pude marcar inactivas: ${error.message}`);
   }
 
+  // Update aparte y best-effort: si la migración 022 no está aplicada, falla
+  // solo esto y no el marcado de retiradas de arriba. Así el barrido periódico
+  // no vuelve a verificar lo que el chat acaba de confirmar.
+  const verified = candidates.filter((_, i) => verdicts[i] !== 'unknown').map((c) => c.id);
+  if (verified.length) {
+    const { error } = await getClient()
+      .from('properties')
+      .update({ availability_checked_at: new Date().toISOString() })
+      .in('id', verified);
+    if (error) console.warn(`[availability] no pude registrar la verificación: ${error.message}`);
+  }
+
   return {
     properties: candidates.filter((_, i) => verdicts[i] !== 'gone').slice(0, limit),
     goneCount: goneIds.length,
