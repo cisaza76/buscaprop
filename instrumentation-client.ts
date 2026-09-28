@@ -7,8 +7,9 @@
 //   adblockers no corten los eventos.
 // - person_profiles 'identified_only': anónimos sin perfil; se identifica por
 //   id de auth al iniciar sesión (lib/analytics/client.ts), nunca por correo.
-// - Session replay con todos los inputs enmascarados; el hilo del chat, donde
-//   el usuario escribe su teléfono, va con ph-no-capture (no se graba).
+// - Session replay (solo con NEXT_PUBLIC_POSTHOG_REPLAY_ENABLED=true) con todos
+//   los inputs enmascarados; el hilo del chat, donde el usuario escribe su
+//   teléfono, va con ph-no-capture (no se graba).
 
 import posthog from 'posthog-js';
 
@@ -27,6 +28,10 @@ if (token) {
       // del usuario en la barra de navegación (u otro dato) no puede llegar
       // a PostHog por un clic.
       mask_all_text: true,
+      // Replay APAGADO por defecto: se enciende con
+      // NEXT_PUBLIC_POSTHOG_REPLAY_ENABLED=true cuando esté publicada la
+      // política de tratamiento de datos (PR de privacidad / Ley 1581).
+      disable_session_recording: process.env.NEXT_PUBLIC_POSTHOG_REPLAY_ENABLED !== 'true',
       session_recording: {
         maskAllInputs: true,
         // Texto renderizado con datos de contacto (no solo inputs).
