@@ -1,4 +1,5 @@
 // lib/supabase.ts
+import { notifySignupCompleted } from '@/lib/analytics/signup-notify';
 import { createClient } from '@supabase/supabase-js';
 import type { User, Session } from '@supabase/supabase-js';
 import { normalizeSupabaseUrl } from './supabase-url';
@@ -148,6 +149,7 @@ export async function signUpWithEmail(
   });
   if (error) return { success: false, error: describeAuthError(error) };
   if (!data.user) return { success: false, error: describeAuthError(null) };
+  notifySignupCompleted(data.session?.access_token);
   return { success: true, user: data.user as AuthUser };
 }
 

@@ -14,6 +14,7 @@ import {
   type UserProfile,
   type Agency,
 } from '@/lib/supabase';
+import { identifyUser, resetAnalytics } from '@/lib/analytics/client';
 
 interface AuthContextType {
   user: User | null;
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (isMounted) {
               setUserProfile(profile);
               setAgency(userAgency);
+              identifyUser(currentUser, userAgency);
             }
           }
         }
@@ -88,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const userAgency = await getUserAgency(newUser.id);
         setUserProfile(profile);
         setAgency(userAgency);
+        identifyUser(newUser, userAgency);
       } else {
         setUserProfile(null);
         setAgency(null);
@@ -129,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
+    resetAnalytics();
 
     setUser(null);
     setSession(null);

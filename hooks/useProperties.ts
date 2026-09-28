@@ -33,7 +33,9 @@ export function useProperties() {
   const latestRequest = useRef(0);
 
   const runSearch = useCallback(
-    async (nextFilters: PropertyFilters, nextPage = 1) => {
+    // Devuelve el total si esta búsqueda quedó en pantalla (null si falló o la
+    // pisó una más nueva) — el dashboard lo usa para search_performed.
+    async (nextFilters: PropertyFilters, nextPage = 1): Promise<{ count: number } | null> => {
       const requestId = ++latestRequest.current;
       setIsLoading(true);
       setError(null);
@@ -51,13 +53,14 @@ export function useProperties() {
           limit: PAGE_SIZE,
           offset,
         });
-        if (requestId !== latestRequest.current) return; // respuesta vieja
+        if (requestId !== latestRequest.current) return null; // respuesta vieja
         setProperties(results as Property[]);
         setTotalCount(count ?? 0);
         setPage(nextPage);
         setFilters(nextFilters);
+        return { count: count ?? 0 };
       } catch (err) {
-        if (requestId !== latestRequest.current) return;
+        if (requestId !== latestRequest.current) return null;
         const msg =
           err instanceof Error
             ? err.message
@@ -67,6 +70,7 @@ export function useProperties() {
         setError(msg);
         setProperties([]);
         setTotalCount(0);
+        return null;
       } finally {
         if (requestId === latestRequest.current) setIsLoading(false);
       }
