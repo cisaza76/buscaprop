@@ -8,6 +8,7 @@ import {
   getCurrentSession,
   getCurrentUser,
   getUserProfile,
+  signUpWithEmail,
   getUserAgency,
   onAuthStateChange,
   type UserProfile,
@@ -99,57 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signUp = useCallback(
-    async (email: string, password: string, fullName: string) => {
-      try {
-        const response = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { full_name: fullName },
-          },
-        });
-
-        if (response.error) throw response.error;
-
-        const { data: agencyData, error: agencyError } = await supabase
-          .from('agencies')
-          .insert({
-            name: `Agencia de ${fullName}`,
-            plan: 'solo',
-            max_agents: 1,
-            subscription_status: 'trial',
-          })
-          .select()
-          .single();
-
-        if (agencyError) throw agencyError;
-
-        const { data: profile, error: profileError } = await supabase
-          .from('users')
-          .insert({
-            id: response.data.user?.id,
-            agency_id: agencyData.id,
-            full_name: fullName,
-            role: 'owner',
-          })
-          .select()
-          .single();
-
-        if (profileError) throw profileError;
-
-        return {
-          success: true,
-          user: response.data.user,
-          message: 'Verifica tu correo para completar el registro',
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Error en registro';
-        return {
-          success: false,
-          error: message,
-        };
-      }
-    },
+    async (email: string, password: string, fullName: string) => signUpWithEmail(email, password, fullName),
     []
   );
 

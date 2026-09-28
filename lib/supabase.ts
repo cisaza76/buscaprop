@@ -98,70 +98,57 @@ export interface Property {
 // AUTENTICACIÓN
 // ============================================================================
 
+// Traduce los errores de Supabase Auth a algo que el usuario pueda accionar.
+// Antes el registro mostraba "Error en registro" para todo: el error de
+// Supabase no es instancia de Error y caía siempre al mensaje genérico.
+export function describeAuthError(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof (error as { message?: unknown })?.message === 'string'
+        ? (error as { message: string }).message
+        : '';
+  if (/already registered|already exists/i.test(raw)) {
+    return 'Ya existe una cuenta con ese correo. Inicia sesión o recupera tu contraseña.';
+  }
+  if (/password should be at least|weak password/i.test(raw)) {
+    return 'La contraseña es muy débil: usa al menos 8 caracteres.';
+  }
+  if (/invalid.*email|email address .* is invalid/i.test(raw)) {
+    return 'El correo no es válido.';
+  }
+  if (/rate limit|too many/i.test(raw)) {
+    return 'Demasiados intentos seguidos. Espera un minuto y vuelve a intentar.';
+  }
+  if (/fetch|network/i.test(raw)) {
+    return 'No pudimos conectar con el servidor. Revisa tu conexión y vuelve a intentar.';
+  }
+  return raw ? `No pudimos crear la cuenta: ${raw}` : 'No pudimos crear la cuenta. Intenta de nuevo.';
+}
+
+// La agencia y el perfil los crea la base (trigger handle_new_user, migración
+// 024) en la misma transacción que la cuenta. Crearlos desde el browser
+// fallaba por RLS en el RETURNING de agencies y dejaba cuentas sin perfil
+// (13 de 14 al 2026-09-28).
 export async function signUpWithEmail(
   email: string,
   password: string,
   fullName: string,
   agencyName?: string
-) {
-  try {
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-      },
-    });
-
-    if (authError) throw authError;
-    if (!authData.user) throw new Error('Error al crear usuario');
-
-    let finalAgencyId = '';
-    if (!agencyName) {
-      agencyName = `Agencia de ${fullName}`;
-    }
-
-    const { data: agency, error: agencyError } = await supabase
-      .from('agencies')
-      .insert({
-        name: agencyName,
-        plan: 'solo',
-        max_agents: 1,
-        subscription_status: 'trial',
-      })
-      .select()
-      .single();
-
-    if (agencyError) throw agencyError;
-    finalAgencyId = agency.id;
-
-    const { data: profile, error: profileError } = await supabase
-      .from('users')
-      .insert({
-        id: authData.user.id,
-        agency_id: finalAgencyId,
+): Promise<{ success: true; user: AuthUser } | { success: false; error: string }> {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
         full_name: fullName,
-        role: 'owner',
-      })
-      .select()
-      .single();
-
-    if (profileError) throw profileError;
-
-    return {
-      success: true,
-      user: authData.user,
-      profile,
-      message: 'Verifica tu correo para completar el registro',
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Error en registro',
-    };
-  }
+        ...(agencyName ? { agency_name: agencyName } : {}),
+      },
+    },
+  });
+  if (error) return { success: false, error: describeAuthError(error) };
+  if (!data.user) return { success: false, error: describeAuthError(null) };
+  return { success: true, user: data.user as AuthUser };
 }
 
 export async function signInWithEmail(email: string, password: string) {
@@ -201,7 +188,9 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     .from('users')
     .select('*')
     .eq('id', userId)
-    .single();
+    // maybeSingle: un perfil ausente es null, no un 406 (cuentas del registro
+    // roto antes de la migración 024).
+    .maybeSingle();
 
   if (error) {
     console.error('Error obteniendo perfil:', error);
@@ -219,7 +208,7 @@ export async function getUserAgency(userId: string): Promise<Agency | null> {
     .from('agencies')
     .select('*')
     .eq('id', profile.agency_id)
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Error obteniendo agencia:', error);
