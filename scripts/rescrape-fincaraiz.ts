@@ -7,7 +7,7 @@
 // HTML" y guardaba cifras de la descripción. ~75.600 filas afectadas. Su
 // huella: latitude NULL (las coordenadas también dejaron de leerse), así que
 // el criterio de selección es `latitude is null` y `scraped_at` desde el
-// 24-ago y anterior al arranque de la corrida — lo que ya se re-leyó queda
+// 24-ago y anterior al deploy del parser arreglado — lo que ya se re-leyó queda
 // con scraped_at nuevo y no vuelve a salir. Idempotente y reanudable.
 //
 // Uso:
@@ -26,6 +26,11 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true 
 // Día del cambio de formato: medido por día, el 23-ago todo tenía geo y desde
 // el 25-ago nada (el 24 mitad y mitad).
 const SINCE = '2026-08-24T00:00:00Z';
+// Fin de la cola: deploy del parser arreglado (PR #21). Todo lo escrito
+// después —por este script o por el cron— ya salió del parser bueno. Antes
+// el corte era "inicio de la corrida", y las fichas que nunca ganan
+// coordenadas (retiradas, sin JSON-LD) se re-procesaban en cada lote.
+const QUEUE_END = '2026-09-27T14:12:57Z';
 const PAGE = 500;
 const MAX_CONSECUTIVE_BLOCKS = 3;
 
@@ -57,7 +62,6 @@ async function main() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { persistSession: false } }
   );
-  const runStart = new Date().toISOString();
 
   // Filtros de "absurdo" — los mismos de la auditoría del 2026-09-27.
   const ANOMALY_OR = [
@@ -70,16 +74,17 @@ async function main() {
   ].join(',');
 
   // Keyset por scraped_at: el cursor avanza sobre filas que esta corrida NO
-  // modifica (las procesadas saltan a scraped_at >= runStart).
+  // modifica (las procesadas saltan a scraped_at >= QUEUE_END o a inactivas).
   async function nextPage(after: string): Promise<Row[]> {
     for (let attempt = 1; ; attempt++) {
       let q = sb
         .from('properties')
         .select('id, source_url, scraped_at')
         .eq('source_portal', 'fincaraiz')
+        .eq('is_active', true)
         .is('latitude', null)
         .gt('scraped_at', after)
-        .lt('scraped_at', runStart)
+        .lt('scraped_at', QUEUE_END)
         .order('scraped_at')
         .limit(PAGE);
       if (args.anomalies) q = q.or(ANOMALY_OR);
@@ -194,9 +199,17 @@ async function main() {
 
       const item = parseFincaraizListing(row.source_url, html);
       if (!item) {
-        // Sin precio estructurado ("precio a convenir"): no hay precio real
-        // que guardar. Se deja la fila como está y se reporta el conteo.
+        // Vivo pero sin precio publicable (hidePrice, o sin nodo del aviso):
+        // el price_cop guardado salió de la descripción y es falso. Mejor no
+        // mostrarlo que mostrarlo con un precio ajeno. scraped_at = ahora lo
+        // saca de la cola (el scraper sí lo vio).
         stats.noPrice++;
+        if (!args.dryRun) {
+          await sb
+            .from('properties')
+            .update({ is_active: false, scraped_at: new Date().toISOString() })
+            .eq('id', row.id);
+        }
         continue;
       }
       // Actualizar EN SU FILA: el upsert es por (portal, source_url).
